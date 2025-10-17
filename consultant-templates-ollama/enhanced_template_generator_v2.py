@@ -84,6 +84,40 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 @dataclass
+class AlphaResult:
+    """Track alpha performance and color classification"""
+    template: str
+    region: str
+    sharpe: float
+    margin: float
+    turnover: float
+    returns: float
+    drawdown: float
+    fitness: float
+    color: str  # "green", "yellow", "red"
+    timestamp: float
+    persona_used: str
+    success: bool = True
+
+@dataclass
+class PersonaPerformance:
+    """Track persona performance metrics"""
+    persona_id: str
+    name: str
+    style: str
+    total_uses: int = 0
+    successful_alphas: int = 0
+    green_alphas: int = 0
+    yellow_alphas: int = 0
+    red_alphas: int = 0
+    avg_sharpe: float = 0.0
+    avg_margin: float = 0.0
+    avg_turnover: float = 0.0
+    success_rate: float = 0.0
+    last_used: float = 0.0
+    performance_score: float = 0.0
+
+@dataclass
 class RegionConfig:
     """Configuration for different regions"""
     region: str
@@ -143,6 +177,130 @@ class TemplateResult:
     neutralization: str = "INDUSTRY"  # Track neutralization used
     alpha_id: str = ""  # Track alpha ID for post-simulation analysis (optional)
     timestamp: float = 0.0
+
+class PersonaBandit:
+    """Multi-arm bandit specifically for persona selection and exploration"""
+    
+    def __init__(self, exploration_rate: float = 0.4, confidence_level: float = 0.95):
+        self.exploration_rate = exploration_rate
+        self.confidence_level = confidence_level
+        self.persona_stats = {}  # {persona_id: PersonaPerformance}
+        self.total_persona_uses = 0
+        self.successful_persona_uses = 0
+        
+    def add_persona(self, persona_id: str, name: str, style: str):
+        """Add a new persona to the bandit"""
+        if persona_id not in self.persona_stats:
+            self.persona_stats[persona_id] = PersonaPerformance(
+                persona_id=persona_id,
+                name=name,
+                style=style
+            )
+    
+    def update_persona_performance(self, persona_id: str, alpha_result: AlphaResult):
+        """Update persona performance based on alpha result"""
+        if persona_id not in self.persona_stats:
+            return
+            
+        stats = self.persona_stats[persona_id]
+        stats.total_uses += 1
+        stats.last_used = alpha_result.timestamp
+        
+        if alpha_result.success:
+            stats.successful_alphas += 1
+            stats.success_rate = stats.successful_alphas / stats.total_uses
+            
+            # Update color-based metrics
+            if alpha_result.color == "green":
+                stats.green_alphas += 1
+            elif alpha_result.color == "yellow":
+                stats.yellow_alphas += 1
+            elif alpha_result.color == "red":
+                stats.red_alphas += 1
+            
+            # Update average metrics
+            if stats.successful_alphas == 1:
+                stats.avg_sharpe = alpha_result.sharpe
+                stats.avg_margin = alpha_result.margin
+                stats.avg_turnover = alpha_result.turnover
+            else:
+                # Rolling average
+                alpha = 0.1  # Learning rate
+                stats.avg_sharpe = (1 - alpha) * stats.avg_sharpe + alpha * alpha_result.sharpe
+                stats.avg_margin = (1 - alpha) * stats.avg_margin + alpha * alpha_result.margin
+                stats.avg_turnover = (1 - alpha) * stats.avg_turnover + alpha * alpha_result.turnover
+            
+            # Calculate performance score
+            stats.performance_score = self._calculate_performance_score(stats)
+    
+    def _calculate_performance_score(self, stats: PersonaPerformance) -> float:
+        """Calculate overall performance score for a persona"""
+        # Weight different metrics
+        sharpe_weight = 0.3
+        margin_weight = 0.2
+        turnover_weight = 0.1
+        success_rate_weight = 0.2
+        color_weight = 0.2
+        
+        # Normalize metrics to 0-1 scale
+        sharpe_score = max(0, min(1, stats.avg_sharpe / 2.0))  # Assume max sharpe of 2
+        margin_score = max(0, min(1, stats.avg_margin * 10000 / 50))  # Assume max margin of 50 bps
+        turnover_score = max(0, min(1, 1 - (stats.avg_turnover / 100)))  # Lower turnover is better
+        success_score = stats.success_rate
+        
+        # Color bonus (green > yellow > red)
+        color_score = (stats.green_alphas * 1.0 + stats.yellow_alphas * 0.5 + stats.red_alphas * 0.1) / max(1, stats.successful_alphas)
+        
+        total_score = (
+            sharpe_score * sharpe_weight +
+            margin_score * margin_weight +
+            turnover_score * turnover_weight +
+            success_score * success_rate_weight +
+            color_score * color_weight
+        )
+        
+        return min(1.0, max(0.0, total_score))
+    
+    def select_persona(self, available_personas: List[str]) -> str:
+        """Select persona using UCB1 algorithm with persona performance"""
+        if not available_personas:
+            return None
+            
+        # Add any new personas
+        for persona_id in available_personas:
+            if persona_id not in self.persona_stats:
+                self.add_persona(persona_id, f"Persona_{persona_id}", "Unknown")
+        
+        # Calculate UCB1 values
+        ucb_values = {}
+        for persona_id in available_personas:
+            stats = self.persona_stats[persona_id]
+            
+            if stats.total_uses == 0:
+                ucb_values[persona_id] = float('inf')  # Prioritize unexplored personas
+            else:
+                # UCB1 formula
+                exploration_bonus = math.sqrt(2 * math.log(self.total_persona_uses) / stats.total_uses)
+                ucb_values[persona_id] = stats.performance_score + exploration_bonus
+        
+        # Choose best persona
+        best_persona = max(ucb_values.keys(), key=lambda x: ucb_values[x])
+        return best_persona
+    
+    def get_persona_performance(self, persona_id: str) -> PersonaPerformance:
+        """Get performance statistics for a persona"""
+        return self.persona_stats.get(persona_id, PersonaPerformance(
+            persona_id=persona_id, name="Unknown", style="Unknown"
+        ))
+    
+    def get_top_personas(self, n: int = 5) -> List[PersonaPerformance]:
+        """Get top N performing personas"""
+        sorted_personas = sorted(
+            self.persona_stats.values(),
+            key=lambda x: x.performance_score,
+            reverse=True
+        )
+        return sorted_personas[:n]
 
 class MultiArmBandit:
     """Multi-arm bandit for explore vs exploit decisions with time decay"""
@@ -403,13 +561,13 @@ class ProgressTracker:
         if self.total_simulations > 0:
             sim_progress = (self.completed_simulations / self.total_simulations) * 100
             success_rate = (self.successful_simulations / self.completed_simulations * 100) if self.completed_simulations > 0 else 0
-            
-            print(f"⏱️  {elapsed_str} | 🌍 {self.current_region} ({self.completed_regions}/{self.total_regions}) | "
-                  f"📊 {self.current_phase} | 🎯 Sims: {self.completed_simulations}/{self.total_simulations} "
-                  f"({sim_progress:.1f}%) | ✅ {success_rate:.1f}% | 🏆 Best: {self.best_sharpe:.3f}", end="")
         else:
-            print(f"⏱️  {elapsed_str} | 🌍 {self.current_region} ({self.completed_regions}/{self.total_regions}) | "
-                  f"📊 {self.current_phase}", end="")
+            sim_progress = 0
+            success_rate = 0
+            
+        print(f"⏱️  {elapsed_str} | 🌍 {self.current_region} ({self.completed_regions}/{self.total_regions}) | "
+              f"📊 {self.current_phase} | 🎯 Sims: {self.completed_simulations}/{self.total_simulations} "
+              f"({sim_progress:.1f}%) | ✅ {success_rate:.1f}% | 🏆 Best: {self.best_sharpe:.3f}", end="")
         
         sys.stdout.flush()
 
@@ -470,6 +628,34 @@ class EnhancedTemplateGeneratorV2:
         # Initialize persona system
         self.personas = self._load_personas()
         self.recent_personas = []  # Track recently used personas
+        
+        # Initialize persona bandit system
+        self.persona_bandit = PersonaBandit(exploration_rate=0.4)
+        self.dynamic_personas = []  # Store dynamically generated personas
+        self.persona_generation_count = 0
+        self.persona_evolution_threshold = 50  # Generate new personas every 50 simulations
+        
+        # Add static personas to bandit system with proper IDs
+        for i, persona in enumerate(self.personas):
+            persona_id = f"static_{i}"
+            persona['id'] = persona_id  # Add ID to static persona
+            self.persona_bandit.add_persona(persona_id, persona['name'], persona['style'])
+        
+        # Alpha tracking system
+        self.alpha_results = []  # Store all alpha results
+        self.green_alphas = []  # Store green alphas
+        self.yellow_alphas = []  # Store yellow alphas
+        self.red_alphas = []  # Store red alphas
+        self.alpha_tracking_file = "alpha_tracking.json"
+        
+        # Load existing alpha tracking data
+        self._load_alpha_tracking()
+        
+        # Load existing dynamic personas
+        self._load_dynamic_personas()
+        
+        # Clear invalid dynamic personas that use non-existent operators
+        self._clear_invalid_dynamic_personas()
         
         # Load historical alpha expressions for inspiration from local file
         logger.info("📚 Loading historical alphas from local JSON file...")
@@ -568,11 +754,20 @@ class EnhancedTemplateGeneratorV2:
             'suspicion_scores': []
         }
         
+        # Periodic cleanup system - clean up every 30 minutes
+        self.cleanup_interval = 30 * 60  # 30 minutes in seconds
+        self.last_cleanup_time = time.time()
+        self.cleanup_enabled = True
+        
         # Load existing blacklist for persistence
         self.load_blacklist_from_file()
         
         # Load previous progress if it exists (for exploit data)
         self.load_progress()
+        
+        # Perform initial cleanup on startup
+        logger.info("🧹 STARTUP CLEANUP: Performing initial cleanup to start with clean slate")
+        self.force_cleanup()
         
         # Dynamic field selection strategy tracking
         self.elite_templates_found = 0  # Count of elite templates discovered
@@ -592,17 +787,6 @@ class EnhancedTemplateGeneratorV2:
         
         # For ASI, CHN, and GLB, only delay=1 is available
         if region in ["ASI", "CHN", "GLB"]:
-            return 1
-        
-        # For EUR, prefer delay=0 (higher multiplier: 1.7 vs 1.4)
-        if region == "EUR":
-            delay_0_mult = multipliers.get("0", 1.0)
-            delay_1_mult = multipliers.get("1", 1.0)
-            if delay_0_mult > delay_1_mult:
-                logger.info(f"EUR: Preferring delay=0 (multiplier: {delay_0_mult} vs {delay_1_mult})")
-                return 0
-            else:
-                logger.info(f"EUR: Using delay=1 (multiplier: {delay_1_mult} vs {delay_0_mult})")
             return 1
         
         # For other regions, use weighted selection based on multipliers
@@ -1421,12 +1605,12 @@ Generate 3 PROFITABLE optimized alpha expressions:"""
             margin = template.get('margin', 0)
             
             # Only consider templates that meet the high bar (5 bps = 0.0005)
-            if (sharpe > 1.25 and fitness > 1.0 and margin > 0.0005):
+            if (sharpe > 0.8 and fitness > 0.7 and margin > 0.0005):
                 qualifying_templates.append(template)
                 qualifying_indices.append(i)
         
         if not qualifying_templates:
-            logger.warning(f"⚠️ No templates meet exploitation criteria (Sharpe > 1.25, Fitness > 1.0, Margin > 5bps)")
+            logger.warning(f"⚠️ No templates meet exploitation criteria (Sharpe > 0.8, Fitness > 0.7, Margin > 5bps)")
             logger.info(f"📊 Available templates: {len(self.top_templates)}")
             for i, template in enumerate(self.top_templates[:3]):  # Show first 3 for debugging
                 logger.info(f"   Template {i+1}: Sharpe={template.get('sharpe', 0):.3f}, Fitness={template.get('fitness', 0):.3f}, Margin={template.get('margin', 0):.3f}")
@@ -2437,6 +2621,9 @@ RESPONSE FORMAT:
         import random
         use_real_examples = random.random() < 0.6
         
+        # Track persona usage for alpha tracking
+        current_persona = None
+        
         if use_real_examples:
             # 60% chance: Use historical alpha examples
             historical_alphas = self._select_historical_alphas(3)
@@ -2449,6 +2636,7 @@ RESPONSE FORMAT:
                 historical_examples += "\nUse these as inspiration but create your own unique expression using the selected fields and operators.\n"
             
             persona_prompt = ""  # No persona when using real examples
+            current_persona = "historical_examples"  # Track that we used historical examples
             logger.info(f"📚 HISTORICAL ALPHAS: {historical_alphas}")
             logger.info(f"📚 USING REAL EXAMPLES: Historical alphas for inspiration")
         else:
@@ -2456,7 +2644,11 @@ RESPONSE FORMAT:
             persona = self._select_persona()
             persona_prompt = self._get_persona_prompt(persona, 1)
             historical_examples = ""  # No historical examples when using personas
+            current_persona = persona.get('id', persona.get('name', 'unknown'))  # Track persona ID
             logger.info(f"🎭 USING PERSONA: {persona['name']} - {persona['style']}")
+        
+        # Store current persona for alpha tracking
+        self.current_persona = current_persona
         
         prompt = f"""
 🔨 ALPHA EXPRESSION BUILDER FOR {region.upper()}
@@ -4546,6 +4738,9 @@ RESPONSE FORMAT (return only the expression, no prefixes):
     def _add_template_to_queue(self, template: str, region: str) -> None:
         """Add a regenerated template to the simulation queue"""
         try:
+            # Calculate optimal delay for the region
+            optimal_delay = self.select_optimal_delay(region)
+            
             # Create a new simulation task
             template_dict = {
                 'template': template,
@@ -4696,25 +4891,62 @@ RESPONSE FORMAT (return only the expression, no prefixes):
         return selected_alphas
     
     def _select_persona(self) -> Dict:
-        """Select a random persona, avoiding recently used ones"""
-        if not self.personas:
-            return {"name": "Default", "style": "Standard", "prompt": ""}
+        """Select persona using multi-arm bandit with dynamic generation"""
+        # Check if we should generate a new persona
+        if self._should_generate_new_persona():
+            logger.info("🧬 Generating new dynamic persona...")
+            new_persona = self._generate_dynamic_persona()
+            if new_persona:
+                self.dynamic_personas.append(new_persona)
+                self.persona_generation_count += 1
+                
+                # Add to persona bandit
+                self.persona_bandit.add_persona(
+                    new_persona['id'], 
+                    new_persona['name'], 
+                    new_persona['style']
+                )
+                
+                logger.info(f"✅ Added new dynamic persona: {new_persona['name']}")
         
-        # Get available personas (excluding recent ones)
-        available_personas = [p for p in self.personas if p['name'] not in self.recent_personas]
+        # Try to evolve a top-performing persona occasionally
+        if (self.persona_generation_count % (self.persona_evolution_threshold * 2) == 0 and 
+            len(self.dynamic_personas) > 0):
+            top_personas = self.persona_bandit.get_top_personas(n=1)
+            if top_personas and top_personas[0].successful_alphas > 2:
+                logger.info("🧬 Evolving top-performing persona...")
+                base_persona = next((p for p in self.dynamic_personas 
+                                   if p['id'] == top_personas[0].persona_id), None)
+                if base_persona:
+                    evolved_persona = self._evolve_persona(base_persona)
+                    if evolved_persona:
+                        self.dynamic_personas.append(evolved_persona)
+                        self.persona_bandit.add_persona(
+                            evolved_persona['id'],
+                            evolved_persona['name'],
+                            evolved_persona['style']
+                        )
+                        logger.info(f"✅ Added evolved persona: {evolved_persona['name']}")
         
-        # If all personas have been used recently, reset the recent list
-        if not available_personas:
-            self.recent_personas = []
-            available_personas = self.personas
+        # Select persona using bandit algorithm
+        selected_persona = self._select_persona_with_bandit()
         
-        # Select random persona
-        selected_persona = random.choice(available_personas)
+        # Track persona usage
+        persona_id = selected_persona.get('id', f"static_{selected_persona.get('name', 'default')}")
+        self.persona_bandit.total_persona_uses += 1
         
-        # Track recent personas (keep last 3)
-        self.recent_personas.append(selected_persona['name'])
-        if len(self.recent_personas) > 3:
-            self.recent_personas.pop(0)
+        # Log if dynamic persona is selected
+        if persona_id.startswith('dynamic_') or persona_id.startswith('evolved_'):
+            logger.info(f"🤖 Using dynamic persona: {selected_persona['name']} (ID: {persona_id})")
+        
+        # Add to recent personas for diversity
+        persona_name = selected_persona.get('name', 'Unknown')
+        if persona_name not in self.recent_personas:
+            self.recent_personas.append(persona_name)
+        
+        # Keep only last 5 recent personas
+        if len(self.recent_personas) > 5:
+            self.recent_personas = self.recent_personas[-5:]
         
         logger.info(f"🎭 SELECTED PERSONA: {selected_persona['name']} ({selected_persona['style']})")
         return selected_persona
@@ -4741,10 +4973,761 @@ FINAL REQUIREMENTS:
         
         return base_prompt + final_requirements
     
+    def _load_alpha_tracking(self):
+        """Load existing alpha tracking data from file"""
+        try:
+            if os.path.exists(self.alpha_tracking_file):
+                with open(self.alpha_tracking_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    self.alpha_results = [AlphaResult(**result) for result in data.get('alpha_results', [])]
+                    self.green_alphas = [AlphaResult(**result) for result in data.get('green_alphas', [])]
+                    self.yellow_alphas = [AlphaResult(**result) for result in data.get('yellow_alphas', [])]
+                    self.red_alphas = [AlphaResult(**result) for result in data.get('red_alphas', [])]
+                    logger.info(f"📊 Loaded {len(self.alpha_results)} alpha results from tracking file")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to load alpha tracking data: {e}")
+    
+    def _save_alpha_tracking(self):
+        """Save alpha tracking data to file"""
+        try:
+            data = {
+                'alpha_results': [asdict(result) for result in self.alpha_results],
+                'green_alphas': [asdict(result) for result in self.green_alphas],
+                'yellow_alphas': [asdict(result) for result in self.yellow_alphas],
+                'red_alphas': [asdict(result) for result in self.red_alphas],
+                'timestamp': time.time()
+            }
+            with open(self.alpha_tracking_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to save alpha tracking data: {e}")
+    
+    def _classify_alpha_color(self, result: TemplateResult) -> str:
+        """Classify alpha result into green, yellow, or red based on performance"""
+        if not result.success:
+            return "red"
+        
+        # Green criteria: High performance across multiple metrics
+        if (result.sharpe >= 1.5 and result.margin >= 0.001 and 
+            result.turnover <= 50 and result.returns > 0):
+            return "green"
+        
+        # Yellow criteria: Moderate performance
+        elif (result.sharpe >= 0.5 and result.margin >= 0.0001 and 
+              result.turnover <= 100):
+            return "yellow"
+        
+        # Red criteria: Poor performance
+        else:
+            return "red"
+    
+    def _track_alpha_result(self, result: TemplateResult, persona_used: str):
+        """Track alpha result and update persona performance"""
+        # Classify alpha color
+        color = self._classify_alpha_color(result)
+        
+        # Create alpha result record
+        alpha_result = AlphaResult(
+            template=result.template,
+            region=result.region,
+            sharpe=result.sharpe,
+            margin=result.margin,
+            turnover=result.turnover,
+            returns=result.returns,
+            drawdown=result.drawdown,
+            fitness=result.fitness,
+            color=color,
+            timestamp=time.time(),
+            persona_used=persona_used,
+            success=result.success
+        )
+        
+        # Add to tracking lists
+        self.alpha_results.append(alpha_result)
+        
+        if color == "green":
+            self.green_alphas.append(alpha_result)
+        elif color == "yellow":
+            self.yellow_alphas.append(alpha_result)
+        else:
+            self.red_alphas.append(alpha_result)
+        
+        # Update persona performance
+        self.persona_bandit.update_persona_performance(persona_used, alpha_result)
+        
+        # Log the result
+        logger.info(f"🎯 Alpha tracked: {color.upper()} - Sharpe: {result.sharpe:.3f}, "
+                   f"Margin: {result.margin:.4f}, Persona: {persona_used}")
+        
+        # Save tracking data periodically
+        if len(self.alpha_results) % 10 == 0:
+            self._save_alpha_tracking()
+    
+    def _generate_dynamic_persona(self) -> Dict:
+        """Generate a new persona using LLM based on successful alpha patterns"""
+        try:
+            # Get top performing personas for inspiration
+            top_personas = self.persona_bandit.get_top_personas(n=3)
+            
+            # Get successful alpha patterns
+            successful_alphas = [a for a in self.alpha_results if a.color in ["green", "yellow"]]
+            
+            # Get examples of successful persona prompts for reference
+            persona_examples = []
+            for persona in self.personas[:3]:  # Use first 3 static personas as examples
+                persona_examples.append(f"Name: {persona['name']}\nStyle: {persona['style']}\nPrompt: {persona['prompt'][:200]}...")
+            
+            # Create comprehensive prompt for persona generation
+            persona_prompt = f"""
+Generate a new quantitative researcher persona for WorldQuant Brain alpha generation based on successful patterns.
+
+EXISTING PERSONA EXAMPLES:
+{chr(10).join(persona_examples)}
+
+SUCCESSFUL PERSONAS PERFORMANCE:
+{chr(10).join([f"- {p.name} ({p.style}): {p.successful_alphas} successful alphas, {p.green_alphas} green, {p.yellow_alphas} yellow" for p in top_personas])}
+
+SUCCESSFUL ALPHA PATTERNS:
+{chr(10).join([f"- Sharpe: {a.sharpe:.3f}, Margin: {a.margin:.4f}, Color: {a.color}, Template: {a.template[:50]}..." for a in successful_alphas[-5:]])}
+
+REQUIREMENTS FOR NEW PERSONA:
+1. Create a specialized quantitative researcher with a unique focus area
+2. Use ONLY VALID WorldQuant Brain operators:
+   - ARITHMETIC: add, subtract, multiply, divide, power, sqrt, log, exp, abs, sign, min, max, inverse, signed_power, reverse, to_nan, densify
+   - TIME SERIES: ts_rank, ts_delta, ts_mean, ts_std, ts_corr, ts_regression, ts_zscore, ts_scale, ts_sum, ts_std_dev, ts_backfill, kth_element, jump_decay, ts_count_nans, ts_target_tvr_decay, ts_target_tvr_delta_limit, ts_covariance, ts_decay_linear, ts_product, ts_min, ts_step, ts_max, ts_quantile, days_from_last_change, hump, ts_delay, last_diff_value, ts_av_diff, ts_arg_min, ts_arg_max
+   - CROSS SECTIONAL: rank, scale, normalize, quantile, winsorize, zscore, vector_neut, scale_down
+   - VECTOR: vec_avg, vec_sum, vec_max, vec_min
+   - LOGICAL: not, and, or, less, equal, not_equal, greater, greater_equal, less_equal, is_nan, if_else
+   - TRANSFORMATIONAL: trade_when, bucket
+   - GROUP: group_zscore, group_scale, group_max, group_min, group_rank, group_neutralize, group_mean, group_backfill, group_cartesian_product
+3. Specify field usage patterns (close, volume, high, low, industry, sector, market_cap, region)
+4. Include emoji indicators and clear formatting
+5. Provide specific strategies and examples with VALID operators only
+6. Focus on economically significant patterns
+7. Include operator percentages and field combinations
+8. Add final requirements section
+
+PERSONA STRUCTURE:
+- Name: Creative, descriptive name
+- Style: Brief style description
+- Prompt: Detailed prompt with:
+  * Operator focus and percentages
+  * Field usage patterns
+  * Specific strategies with examples
+  * Emoji indicators
+  * Final requirements section
+
+Return JSON format:
+{{
+    "name": "Creative Persona Name",
+    "style": "Brief Style Description", 
+    "prompt": "Detailed prompt with emojis, operator focus, field patterns, strategies, and requirements"
+}}
+"""
+            
+            # Generate persona using Ollama
+            response = ollama.chat(
+                model=self.ollama_model,
+                messages=[{"role": "user", "content": persona_prompt}],
+                options={"temperature": 0.8, "top_p": 0.9}
+            )
+            
+            # Parse response
+            content = response['message']['content']
+            
+            # Extract JSON from response
+            import re
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                persona_data = json.loads(json_match.group())
+                
+                # Validate and enhance persona quality
+                persona_data = self._enhance_persona_prompt(persona_data)
+                
+                # Add unique ID
+                persona_data['id'] = f"dynamic_{self.persona_generation_count}_{int(time.time())}"
+                
+                logger.info(f"🤖 Generated dynamic persona: {persona_data['name']}")
+                return persona_data
+            else:
+                logger.warning("⚠️ Failed to parse persona JSON from LLM response")
+                return None
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to generate dynamic persona: {e}")
+            return None
+    
+    def _evolve_persona(self, base_persona: Dict) -> Dict:
+        """Evolve an existing persona to create a new variation"""
+        try:
+            # Get examples of successful persona structures
+            persona_examples = []
+            for persona in self.personas[:2]:  # Use 2 static personas as examples
+                persona_examples.append(f"Name: {persona['name']}\nStyle: {persona['style']}\nPrompt: {persona['prompt'][:300]}...")
+            
+            evolution_prompt = f"""
+Evolve this successful persona to create a new variation that might generate even better alphas:
+
+BASE PERSONA TO EVOLVE:
+Name: {base_persona['name']}
+Style: {base_persona['style']}
+Prompt: {base_persona['prompt'][:500]}...
+
+SUCCESSFUL PERSONA EXAMPLES FOR REFERENCE:
+{chr(10).join(persona_examples)}
+
+EVOLUTION REQUIREMENTS:
+1. Keep the successful core elements from the base persona
+2. Add new innovative approaches and operator combinations
+3. Create a slightly different personality and focus area
+4. Use ONLY VALID WorldQuant Brain operators:
+   - ARITHMETIC: add, subtract, multiply, divide, power, sqrt, log, exp, abs, sign, min, max, inverse, signed_power, reverse, to_nan, densify
+   - TIME SERIES: ts_rank, ts_delta, ts_mean, ts_std, ts_corr, ts_regression, ts_zscore, ts_scale, ts_sum, ts_std_dev, ts_backfill, kth_element, jump_decay, ts_count_nans, ts_target_tvr_decay, ts_target_tvr_delta_limit, ts_covariance, ts_decay_linear, ts_product, ts_min, ts_step, ts_max, ts_quantile, days_from_last_change, hump, ts_delay, last_diff_value, ts_av_diff, ts_arg_min, ts_arg_max
+   - CROSS SECTIONAL: rank, scale, normalize, quantile, winsorize, zscore, vector_neut, scale_down
+   - VECTOR: vec_avg, vec_sum, vec_max, vec_min
+   - LOGICAL: not, and, or, less, equal, not_equal, greater, greater_equal, less_equal, is_nan, if_else
+   - TRANSFORMATIONAL: trade_when, bucket
+   - GROUP: group_zscore, group_scale, group_max, group_min, group_rank, group_neutralize, group_mean, group_backfill, group_cartesian_product
+5. Specify field usage patterns (close, volume, high, low, industry, sector, market_cap, region)
+6. Include emoji indicators and clear formatting
+7. Provide specific strategies and examples with VALID operators only
+8. Focus on economically significant patterns
+9. Include operator percentages and field combinations
+10. Add final requirements section
+
+EVOLVED PERSONA STRUCTURE:
+- Name: Creative, evolved name (different from base)
+- Style: Brief evolved style description
+- Prompt: Detailed prompt with:
+  * Operator focus and percentages (evolved from base)
+  * Field usage patterns (enhanced from base)
+  * Specific strategies with examples (new approaches)
+  * Emoji indicators
+  * Final requirements section
+
+Return JSON format:
+{{
+    "name": "Evolved Persona Name",
+    "style": "Evolved Style Description",
+    "prompt": "Detailed evolved prompt with emojis, operator focus, field patterns, strategies, and requirements"
+}}
+"""
+            
+            response = ollama.chat(
+                model=self.ollama_model,
+                messages=[{"role": "user", "content": evolution_prompt}],
+                options={"temperature": 0.7, "top_p": 0.8}
+            )
+            
+            content = response['message']['content']
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                evolved_persona = json.loads(json_match.group())
+                
+                # Validate and enhance persona quality
+                evolved_persona = self._enhance_persona_prompt(evolved_persona)
+                
+                evolved_persona['id'] = f"evolved_{base_persona['id']}_{int(time.time())}"
+                logger.info(f"🧬 Evolved persona: {evolved_persona['name']} from {base_persona['name']}")
+                return evolved_persona
+            else:
+                return None
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to evolve persona: {e}")
+            return None
+    
+    def _select_persona_with_bandit(self) -> Dict:
+        """Select persona using multi-arm bandit algorithm"""
+        # Combine static and dynamic personas
+        all_personas = self.personas + self.dynamic_personas
+        
+        if not all_personas:
+            return {"name": "Default", "style": "Standard", "prompt": "", "id": "default"}
+        
+        # Get persona IDs
+        persona_ids = [p.get('id', f"static_{i}") for i, p in enumerate(all_personas)]
+        
+        # Debug logging
+        logger.info(f"🎭 Available personas: {len(all_personas)} total ({len(self.personas)} static, {len(self.dynamic_personas)} dynamic)")
+        logger.info(f"🎭 Persona IDs: {persona_ids}")
+        
+        # Select using bandit
+        selected_id = self.persona_bandit.select_persona(persona_ids)
+        logger.info(f"🎭 Bandit selected ID: {selected_id}")
+        
+        # Find the selected persona
+        for persona in all_personas:
+            if persona.get('id', '') == selected_id:
+                logger.info(f"🎭 Found selected persona: {persona['name']} (ID: {persona.get('id', 'no-id')})")
+                return persona
+        
+        # Fallback to random selection
+        logger.warning(f"🎭 Fallback to random selection (selected_id: {selected_id} not found)")
+        return random.choice(all_personas)
+    
+    def _should_generate_new_persona(self) -> bool:
+        """Check if we should generate a new persona based on performance and time"""
+        # Generate new persona every N simulations
+        if self.persona_generation_count % self.persona_evolution_threshold == 0:
+            return True
+        
+        # Generate if we have too many red alphas recently
+        recent_alphas = [a for a in self.alpha_results[-20:] if a.timestamp > time.time() - 3600]  # Last hour
+        red_count = len([a for a in recent_alphas if a.color == "red"])
+        if red_count > 15:  # Too many red alphas
+            return True
+        
+        # Generate if we haven't had green alphas recently
+        green_count = len([a for a in recent_alphas if a.color == "green"])
+        if green_count == 0 and len(recent_alphas) > 10:
+            return True
+        
+        return False
+    
+    def _validate_persona_quality(self, persona: Dict) -> bool:
+        """Validate that generated persona meets quality standards"""
+        if not persona or not isinstance(persona, dict):
+            return False
+        
+        # Check required fields
+        if not all(key in persona for key in ['name', 'style', 'prompt']):
+            return False
+        
+        # Check prompt quality
+        prompt = persona.get('prompt', '')
+        if len(prompt) < 200:  # Too short
+            return False
+        
+        # Check for required elements
+        required_elements = [
+            'operator',  # Should mention operators
+            'field',     # Should mention fields
+            'strategy',  # Should have strategies
+            '🎯',        # Should have emojis
+        ]
+        
+        prompt_lower = prompt.lower()
+        if not all(element in prompt_lower for element in ['operator', 'field', 'strategy']):
+            return False
+        
+        # Check for emoji indicators
+        if '🎯' not in prompt and '📊' not in prompt and '🔍' not in prompt:
+            return False
+        
+        return True
+    
+    def _enhance_persona_prompt(self, persona: Dict) -> Dict:
+        """Enhance a generated persona to match quality standards"""
+        try:
+            if not self._validate_persona_quality(persona):
+                logger.info("🔧 Enhancing persona prompt quality...")
+                
+                enhancement_prompt = f"""
+Enhance this persona prompt to match the quality and detail of professional quantitative researcher personas:
+
+CURRENT PERSONA:
+Name: {persona['name']}
+Style: {persona['style']}
+Prompt: {persona['prompt']}
+
+ENHANCEMENT REQUIREMENTS:
+1. Add detailed operator usage instructions with percentages using ONLY VALID WorldQuant Brain operators:
+   - ARITHMETIC: add, subtract, multiply, divide, power, sqrt, log, exp, abs, sign, min, max, inverse, signed_power, reverse, to_nan, densify
+   - TIME SERIES: ts_rank, ts_delta, ts_mean, ts_std, ts_corr, ts_regression, ts_zscore, ts_scale, ts_sum, ts_std_dev, ts_backfill, kth_element, jump_decay, ts_count_nans, ts_target_tvr_decay, ts_target_tvr_delta_limit, ts_covariance, ts_decay_linear, ts_product, ts_min, ts_step, ts_max, ts_quantile, days_from_last_change, hump, ts_delay, last_diff_value, ts_av_diff, ts_arg_min, ts_arg_max
+   - CROSS SECTIONAL: rank, scale, normalize, quantile, winsorize, zscore, vector_neut, scale_down
+   - VECTOR: vec_avg, vec_sum, vec_max, vec_min
+   - LOGICAL: not, and, or, less, equal, not_equal, greater, greater_equal, less_equal, is_nan, if_else
+   - TRANSFORMATIONAL: trade_when, bucket
+   - GROUP: group_zscore, group_scale, group_max, group_min, group_rank, group_neutralize, group_mean, group_backfill, group_cartesian_product
+2. Include specific field usage patterns (close, volume, high, low, industry, sector, market_cap, region)
+3. Add emoji indicators (🎯, 📊, 🔍, ⏰, 🔢, etc.)
+4. Provide specific strategies with examples using VALID operators only
+5. Add final requirements section
+6. Make it comprehensive and detailed like professional personas
+
+Return JSON format:
+{{
+    "name": "{persona['name']}",
+    "style": "{persona['style']}",
+    "prompt": "Enhanced detailed prompt with emojis, operator focus, field patterns, strategies, and requirements"
+}}
+"""
+                
+                response = ollama.chat(
+                    model=self.ollama_model,
+                    messages=[{"role": "user", "content": enhancement_prompt}],
+                    options={"temperature": 0.6, "top_p": 0.8}
+                )
+                
+                content = response['message']['content']
+                json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                if json_match:
+                    enhanced_persona = json.loads(json_match.group())
+                    if self._validate_persona_quality(enhanced_persona):
+                        logger.info(f"✅ Enhanced persona: {enhanced_persona['name']}")
+                        return enhanced_persona
+                
+                # If enhancement fails, return original
+                return persona
+            
+            return persona
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to enhance persona: {e}")
+            return persona
+    
+    def _display_persona_performance(self):
+        """Display persona performance statistics"""
+        if not self.persona_bandit.persona_stats:
+            logger.info("📊 No persona performance data available yet")
+            return
+        
+        logger.info("📊 PERSONA PERFORMANCE STATISTICS:")
+        logger.info("=" * 60)
+        
+        # Get top performing personas
+        top_personas = self.persona_bandit.get_top_personas(n=5)
+        
+        for i, persona in enumerate(top_personas, 1):
+            logger.info(f"{i}. {persona.name} ({persona.style})")
+            logger.info(f"   Uses: {persona.total_uses}, Success Rate: {persona.success_rate:.2%}")
+            logger.info(f"   Green: {persona.green_alphas}, Yellow: {persona.yellow_alphas}, Red: {persona.red_alphas}")
+            logger.info(f"   Avg Sharpe: {persona.avg_sharpe:.3f}, Avg Margin: {persona.avg_margin:.4f}")
+            logger.info(f"   Performance Score: {persona.performance_score:.3f}")
+            logger.info("")
+        
+        # Display alpha color statistics
+        total_alphas = len(self.alpha_results)
+        green_count = len(self.green_alphas)
+        yellow_count = len(self.yellow_alphas)
+        red_count = len(self.red_alphas)
+        
+        logger.info("🎯 ALPHA COLOR DISTRIBUTION:")
+        logger.info(f"   Total Alphas: {total_alphas}")
+        
+        if total_alphas > 0:
+            logger.info(f"   Green: {green_count} ({green_count/total_alphas*100:.1f}%)")
+            logger.info(f"   Yellow: {yellow_count} ({yellow_count/total_alphas*100:.1f}%)")
+            logger.info(f"   Red: {red_count} ({red_count/total_alphas*100:.1f}%)")
+        else:
+            logger.info(f"   Green: {green_count} (0.0%)")
+            logger.info(f"   Yellow: {yellow_count} (0.0%)")
+            logger.info(f"   Red: {red_count} (0.0%)")
+        logger.info("")
+        
+        # Display dynamic persona statistics
+        dynamic_count = len(self.dynamic_personas)
+        logger.info(f"🤖 DYNAMIC PERSONAS: {dynamic_count} generated")
+        logger.info(f"🧬 PERSONA EVOLUTION: {self.persona_generation_count} generations")
+        logger.info("=" * 60)
+    
+    def _save_dynamic_personas(self):
+        """Save dynamically generated personas to file for persistence"""
+        try:
+            dynamic_personas_data = {
+                'dynamic_personas': self.dynamic_personas,
+                'persona_generation_count': self.persona_generation_count,
+                'generated_at': time.time(),
+                'total_dynamic_personas': len(self.dynamic_personas)
+            }
+            
+            with open('dynamic_personas.json', 'w', encoding='utf-8') as f:
+                json.dump(dynamic_personas_data, f, indent=2, ensure_ascii=False)
+            
+            logger.info(f"💾 Saved {len(self.dynamic_personas)} dynamic personas to dynamic_personas.json")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to save dynamic personas: {e}")
+    
+    def _load_dynamic_personas(self):
+        """Load dynamically generated personas from file"""
+        try:
+            if os.path.exists('dynamic_personas.json'):
+                with open('dynamic_personas.json', 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    self.dynamic_personas = data.get('dynamic_personas', [])
+                    self.persona_generation_count = data.get('persona_generation_count', 0)
+                    
+                    # Add dynamic personas to bandit system
+                    for persona in self.dynamic_personas:
+                        if 'id' in persona:
+                            self.persona_bandit.add_persona(
+                                persona['id'], 
+                                persona['name'], 
+                                persona['style']
+                            )
+                    
+                    logger.info(f"📚 Loaded {len(self.dynamic_personas)} dynamic personas from file")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to load dynamic personas: {e}")
+    
+    def _clear_invalid_dynamic_personas(self):
+        """Clear dynamic personas that use invalid operators"""
+        try:
+            # List of valid WorldQuant Brain operators
+            valid_operators = {
+                # Arithmetic
+                'add', 'subtract', 'multiply', 'divide', 'power', 'sqrt', 'log', 'exp', 'abs', 'sign', 
+                'min', 'max', 'inverse', 'signed_power', 'reverse', 'to_nan', 'densify',
+                # Time Series
+                'ts_rank', 'ts_delta', 'ts_mean', 'ts_std', 'ts_corr', 'ts_regression', 'ts_zscore', 
+                'ts_scale', 'ts_sum', 'ts_std_dev', 'ts_backfill', 'kth_element', 'jump_decay', 
+                'ts_count_nans', 'ts_target_tvr_decay', 'ts_target_tvr_delta_limit', 'ts_covariance', 
+                'ts_decay_linear', 'ts_product', 'ts_min', 'ts_step', 'ts_max', 'ts_quantile', 
+                'days_from_last_change', 'hump', 'ts_delay', 'last_diff_value', 'ts_av_diff', 
+                'ts_arg_min', 'ts_arg_max',
+                # Cross Sectional
+                'rank', 'scale', 'normalize', 'quantile', 'winsorize', 'zscore', 'vector_neut', 'scale_down',
+                # Vector
+                'vec_avg', 'vec_sum', 'vec_max', 'vec_min',
+                # Logical
+                'not', 'and', 'or', 'less', 'equal', 'not_equal', 'greater', 'greater_equal', 
+                'less_equal', 'is_nan', 'if_else',
+                # Transformational
+                'trade_when', 'bucket',
+                # Group
+                'group_zscore', 'group_scale', 'group_max', 'group_min', 'group_rank', 'group_neutralize', 
+                'group_mean', 'group_backfill', 'group_cartesian_product'
+            }
+            
+            # Check each dynamic persona for invalid operators
+            valid_personas = []
+            invalid_count = 0
+            
+            for persona in self.dynamic_personas:
+                prompt = persona.get('prompt', '').lower()
+                is_valid = True
+                
+                # Check for common invalid operators
+                invalid_operators = [
+                    'rolling_vol', 'realized_vol', 'garch_model', 'forecast_vol', 'volatility_index',
+                    'volatility_spread', 'implied_vol', 'option_price', 'call_put_ratio', 'volatility',
+                    'range', 'max_drawdown', 'drawdown_duration', 'volatility_adjusted_return',
+                    'rolling_volatility', 'momentum_rank', 'mom_delta', 'mom_sum', 'mom_scale',
+                    'mom_zscore', 'mom_corr', 'mom_regression', 'mom_std_dev', 'mom_backfill'
+                ]
+                
+                for invalid_op in invalid_operators:
+                    if invalid_op in prompt:
+                        is_valid = False
+                        break
+                
+                if is_valid:
+                    valid_personas.append(persona)
+                else:
+                    invalid_count += 1
+                    logger.info(f"🗑️ Removing invalid persona: {persona['name']} (uses non-existent operators)")
+            
+            if invalid_count > 0:
+                self.dynamic_personas = valid_personas
+                logger.info(f"🧹 Cleared {invalid_count} invalid dynamic personas, {len(valid_personas)} remaining")
+                
+                # Save the cleaned personas
+                self._save_dynamic_personas()
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to clear invalid dynamic personas: {e}")
+    
     def _find_replacement_field(self, invalid_field: str, valid_fields: set, data_fields: list) -> Optional[str]:
         """Find a suitable replacement field for an invalid field"""
         # Simple stub - return None to disable field replacement
         return None
+    
+    def _cleanup_underperforming_personas(self, performance_threshold: float = 0.3, min_uses: int = 5):
+        """Remove underperforming personas based on performance metrics"""
+        try:
+            logger.info("🧹 Starting persona cleanup process...")
+            
+            # Get all persona performance data
+            all_personas = self.personas + self.dynamic_personas
+            personas_to_remove = []
+            
+            for persona in all_personas:
+                persona_id = persona.get('id', f"static_{self.personas.index(persona) if persona in self.personas else 'dynamic'}")
+                performance = self.persona_bandit.get_persona_performance(persona_id)
+                
+                # Check if persona should be removed
+                should_remove = False
+                removal_reason = ""
+                
+                # Skip if persona hasn't been used enough
+                if performance.total_uses < min_uses:
+                    continue
+                
+                # Check performance score
+                if performance.performance_score < performance_threshold:
+                    should_remove = True
+                    removal_reason = f"Low performance score: {performance.performance_score:.3f}"
+                
+                # Check success rate
+                elif performance.success_rate < 0.1 and performance.total_uses >= 10:
+                    should_remove = True
+                    removal_reason = f"Low success rate: {performance.success_rate:.3f}"
+                
+                # Check if persona is too old and unused
+                current_time = time.time()
+                days_since_last_use = (current_time - performance.last_used) / (24 * 3600)
+                if days_since_last_use > 7 and performance.total_uses < 3:
+                    should_remove = True
+                    removal_reason = f"Unused for {days_since_last_use:.1f} days"
+                
+                if should_remove:
+                    personas_to_remove.append({
+                        'persona': persona,
+                        'persona_id': persona_id,
+                        'reason': removal_reason,
+                        'performance': performance
+                    })
+            
+            # Remove underperforming personas
+            removed_count = 0
+            for removal_info in personas_to_remove:
+                persona = removal_info['persona']
+                persona_id = removal_info['persona_id']
+                reason = removal_info['reason']
+                performance = removal_info['performance']
+                
+                logger.info(f"🗑️ Removing underperforming persona: {persona['name']} - {reason}")
+                logger.info(f"   Uses: {performance.total_uses}, Success Rate: {performance.success_rate:.3f}, Score: {performance.performance_score:.3f}")
+                
+                # Remove from dynamic personas if it's a dynamic persona
+                if persona in self.dynamic_personas:
+                    self.dynamic_personas.remove(persona)
+                    removed_count += 1
+                
+                # Remove from persona bandit
+                if persona_id in self.persona_bandit.persona_stats:
+                    del self.persona_bandit.persona_stats[persona_id]
+            
+            if removed_count > 0:
+                logger.info(f"🧹 Removed {removed_count} underperforming personas")
+                # Save the cleaned personas
+                self._save_dynamic_personas()
+            
+            return removed_count
+            
+        except Exception as e:
+            logger.error(f"❌ Error during persona cleanup: {e}")
+            return 0
+    
+    def _generate_high_performance_personas(self, count: int = 3):
+        """Generate new high-performance personas to replace removed ones"""
+        try:
+            logger.info(f"🧬 Generating {count} new high-performance personas...")
+            
+            # Get top performing personas for inspiration
+            top_personas = self.persona_bandit.get_top_personas(3)
+            
+            new_personas = []
+            for i in range(count):
+                # Create a new persona based on successful patterns
+                new_persona = self._create_optimized_persona(top_personas)
+                if new_persona:
+                    new_personas.append(new_persona)
+            
+            # Add new personas to the system
+            for persona in new_personas:
+                self.dynamic_personas.append(persona)
+                self.persona_bandit.add_persona(
+                    persona['id'], 
+                    persona['name'], 
+                    persona['style']
+                )
+                logger.info(f"✅ Added new optimized persona: {persona['name']}")
+            
+            # Save the updated personas
+            self._save_dynamic_personas()
+            
+            return len(new_personas)
+            
+        except Exception as e:
+            logger.error(f"❌ Error generating new personas: {e}")
+            return 0
+    
+    def _create_optimized_persona(self, top_personas: List[PersonaPerformance]) -> Optional[Dict]:
+        """Create a new persona optimized based on top performers"""
+        try:
+            # Analyze successful patterns from top personas
+            successful_operators = []
+            successful_styles = []
+            
+            for persona in top_personas:
+                if persona.performance_score > 0.5:
+                    # Extract successful patterns (this is a simplified approach)
+                    successful_styles.append(persona.style)
+            
+            # Generate new persona based on successful patterns
+            persona_templates = [
+                {
+                    "name": "Advanced Quantitative Strategist",
+                    "style": "High-Performance Analytics",
+                    "base_prompt": "🎯 ADVANCED QUANTITATIVE STRATEGIST - 'MAXIMIZE ALPHA GENERATION':\n\n- **OPERATOR FOCUS & PERCENTAGES**:\n  - **TIME SERIES**: ts_rank, ts_delta, ts_corr, ts_regression (50%)\n  - **CROSS SECTIONAL**: rank, scale, quantile, winsorize (30%)\n  - **LOGICAL**: greater, less_equal, and, not_equal (10%)\n  - **ARITHMETIC**: add, subtract, multiply, divide (10%)\n\n- **FIELD USAGE PATTERNS**:\n  - Close prices (40%)\n  - Volume (25%)\n  - High and Low prices (20%)\n  - Industry/Sector (15%)\n\n- **SPECIFIC STRATEGIES & EXAMPLES**:\n  * **Momentum Strategy**: Use `ts_rank(close, 20)` to identify momentum patterns and trade accordingly.\n  * **Mean Reversion**: Apply `ts_delta(close, 5)` to detect short-term reversals.\n  * **Cross-Sectional Ranking**: Use `rank(volume)` to identify high-volume stocks for trading.\n\n- **EMOJI INDICATORS**:\n  📈 - Momentum\n  🔄 - Mean Reversion\n  📊 - Volume Analysis\n  🎯 - Precision Trading\n\n- **FINAL REQUIREMENTS**:\n  - Ensure strategies are economically significant with Sharpe > 1.0\n  - Implement proper risk management\n  - Use multiple timeframes for validation"
+                },
+                {
+                    "name": "Statistical Arbitrage Expert",
+                    "style": "Advanced Statistical Modeling",
+                    "base_prompt": "📊 STATISTICAL ARBITRAGE EXPERT - 'EXPLOIT MARKET INEFFICIENCIES':\n\n- **OPERATOR FOCUS & PERCENTAGES**:\n  - **TIME SERIES**: ts_corr, ts_regression, ts_zscore, ts_std (45%)\n  - **CROSS SECTIONAL**: zscore, quantile, winsorize, rank (35%)\n  - **LOGICAL**: greater_equal, less, and, or (10%)\n  - **ARITHMETIC**: add, subtract, multiply, divide (10%)\n\n- **FIELD USAGE PATTERNS**:\n  - Close prices (50%)\n  - Volume (20%)\n  - High/Low (15%)\n  - Industry (15%)\n\n- **SPECIFIC STRATEGIES & EXAMPLES**:\n  * **Pair Trading**: Use `ts_corr(stock1, stock2, 30)` to find correlated pairs for arbitrage.\n  * **Statistical Mean Reversion**: Apply `ts_zscore(close, 20)` to identify overbought/oversold conditions.\n  * **Volatility Trading**: Use `ts_std(close, 10)` to trade volatility patterns.\n\n- **EMOJI INDICATORS**:\n  🔗 - Correlation\n  📈 - Mean Reversion\n  ⚡ - Volatility\n  🎲 - Statistical Edge\n\n- **FINAL REQUIREMENTS**:\n  - Focus on statistically significant relationships\n  - Implement proper cointegration testing\n  - Use multiple validation methods"
+                },
+                {
+                    "name": "Machine Learning Quant",
+                    "style": "AI-Driven Pattern Recognition",
+                    "base_prompt": "🤖 MACHINE LEARNING QUANT - 'PATTERN RECOGNITION MASTERY':\n\n- **OPERATOR FOCUS & PERCENTAGES**:\n  - **TIME SERIES**: ts_regression, ts_corr, ts_rank, ts_delta (55%)\n  - **CROSS SECTIONAL**: rank, scale, quantile, winsorize (25%)\n  - **LOGICAL**: greater, less_equal, and, not_equal (10%)\n  - **ARITHMETIC**: add, subtract, multiply, divide (10%)\n\n- **FIELD USAGE PATTERNS**:\n  - Close prices (45%)\n  - Volume (25%)\n  - High/Low (20%)\n  - Industry/Sector (10%)\n\n- **SPECIFIC STRATEGIES & EXAMPLES**:\n  * **Pattern Recognition**: Use `ts_regression(close, 30)` to identify linear trends and predict future movements.\n  * **Anomaly Detection**: Apply `ts_rank(volume, 20)` to detect unusual trading patterns.\n  * **Feature Engineering**: Combine multiple indicators using `add(ts_delta(close), ts_rank(volume))`.\n\n- **EMOJI INDICATORS**:\n  🧠 - AI Analysis\n  🔍 - Pattern Detection\n  📊 - Feature Engineering\n  🚀 - Predictive Power\n\n- **FINAL REQUIREMENTS**:\n  - Use advanced statistical techniques\n  - Implement proper cross-validation\n  - Focus on robust, generalizable patterns"
+                }
+            ]
+            
+            # Select a random template and customize it
+            template = random.choice(persona_templates)
+            
+            # Generate unique ID
+            persona_id = f"optimized_{int(time.time())}_{random.randint(1000, 9999)}"
+            
+            # Create the new persona
+            new_persona = {
+                "id": persona_id,
+                "name": template["name"],
+                "style": template["style"],
+                "prompt": template["base_prompt"],
+                "generated_at": time.time(),
+                "generation_type": "optimized_replacement"
+            }
+            
+            return new_persona
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating optimized persona: {e}")
+            return None
+    
+    def _perform_persona_maintenance(self):
+        """Perform comprehensive persona maintenance - cleanup and generation"""
+        try:
+            logger.info("🔧 Starting comprehensive persona maintenance...")
+            
+            # Step 1: Cleanup underperforming personas
+            removed_count = self._cleanup_underperforming_personas(
+                performance_threshold=0.25,  # Remove personas with score < 0.25
+                min_uses=3  # Only consider personas used at least 3 times
+            )
+            
+            # Step 2: Generate new personas to replace removed ones
+            if removed_count > 0:
+                new_count = self._generate_high_performance_personas(count=min(removed_count, 5))
+                logger.info(f"🔄 Replaced {removed_count} removed personas with {new_count} new ones")
+            else:
+                # Even if no personas were removed, occasionally add new ones for diversity
+                if len(self.dynamic_personas) < 10:  # Keep minimum diversity
+                    new_count = self._generate_high_performance_personas(count=2)
+                    logger.info(f"🌱 Added {new_count} new personas for diversity")
+            
+            # Step 3: Log current persona statistics
+            total_personas = len(self.personas) + len(self.dynamic_personas)
+            logger.info(f"📊 Persona maintenance complete. Total personas: {total_personas} ({len(self.personas)} static, {len(self.dynamic_personas)} dynamic)")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error during persona maintenance: {e}")
+            return False
     
     def _fix_unknown_variable_retry(self, template: str, error_message: str) -> str:
         """Simple stub - return template as-is"""
@@ -5958,9 +6941,10 @@ These are actual submitted alphas with real performance metrics. Use them as ins
                     logger.error(f"Error monitoring progress URL {progress_url}: {str(e)}")
                     continue
             
-            # Remove completed URLs
+            # Remove completed URLs safely
             for url in completed_urls:
-                progress_urls.remove(url)
+                if url in progress_urls:
+                    progress_urls.remove(url)
             
             if not progress_urls:
                 break
@@ -6011,6 +6995,18 @@ These are actual submitted alphas with real performance metrics. Use them as ins
                 logger.info(f"🧵 Thread count: {self.thread_count}, Completed threads: {self.completed_threads}")
                 logger.info(f"🧵 Thread exceptions: {self.thread_exception_count}")
                 
+                # Display persona performance every 20 iterations
+                if iteration % 20 == 0:
+                    self._display_persona_performance()
+                
+                # Perform persona maintenance every 50 iterations
+                if iteration % 50 == 0:
+                    logger.info("🔧 Performing persona maintenance...")
+                    self._perform_persona_maintenance()
+                
+                # Check for periodic cleanup every iteration
+                self.check_and_cleanup()
+                
                 try:
                     # Process completed futures
                     self._process_completed_futures()
@@ -6043,6 +7039,10 @@ These are actual submitted alphas with real performance metrics. Use them as ins
                     
                     # Save progress every iteration
                     self.save_progress()
+                    
+                    # Save dynamic personas periodically
+                    if iteration % 10 == 0:
+                        self._save_dynamic_personas()
                     
                     # Wait a bit before next iteration
                     time.sleep(2)
@@ -6561,7 +7561,8 @@ These are actual submitted alphas with real performance metrics. Use them as ins
         
         # If there's a streak of more than 5% of the data, it's suspicious
         if max_streak > len(pnl_values) * 0.05:  # More than 5% consecutive identical values
-            logger.warning(f"🚨 FLATLINED PnL detected: {max_streak} consecutive identical values ({max_streak/len(pnl_values)*100:.1f}% of data)")
+            percentage = (max_streak/len(pnl_values)*100) if len(pnl_values) > 0 else 0
+            logger.warning(f"🚨 FLATLINED PnL detected: {max_streak} consecutive identical values ({percentage:.1f}% of data)")
             return True
         
         # Additional strict check: Look for very small variations that might indicate flatlining
@@ -7005,7 +8006,7 @@ These are actual submitted alphas with real performance metrics. Use them as ins
                         margin = template.get('margin', 0)
                         
                         # Only consider templates that meet the high bar (5 bps = 0.0005)
-                        if (sharpe > 1.25 and fitness > 1.0 and margin > 0.0005):
+                        if (sharpe > 0.8 and fitness > 0.7 and margin > 0.0005):
                             elite_templates.append(template)
                     
                     if elite_templates:
@@ -7259,7 +8260,7 @@ These are actual submitted alphas with real performance metrics. Use them as ins
                             margin = template.get('margin', 0)
                             
                             # Only consider templates that meet the high bar (5 bps = 0.0005)
-                            if (sharpe > 1.25 and fitness > 1.0 and margin > 0.0005):
+                            if (sharpe > 0.8 and fitness > 0.7 and margin > 0.0005):
                                 elite_templates.append(template)
                             
                         if elite_templates:
@@ -7690,8 +8691,9 @@ These are actual submitted alphas with real performance metrics. Use them as ins
                         if has_meaningful_metrics:
                             pnl_quality_ok = self.track_template_quality(template['template'], alpha_id, sharpe, fitness, margin)
                         
-                        # Only consider truly successful if both metrics and PnL quality are good
-                        is_truly_successful = has_meaningful_metrics and pnl_quality_ok
+                        # For success counting: consider successful if we have meaningful metrics
+                        # PnL quality is used for template tracking but shouldn't block success counting
+                        is_truly_successful = has_meaningful_metrics
                         
                         logger.info(f"Alpha {alpha_id} metrics: Sharpe={sharpe}, Fitness={fitness}, Turnover={turnover}, Returns={returns}")
                         logger.info(f"Alpha {alpha_id} positions: Long={longCount}, Short={shortCount}")
@@ -7918,6 +8920,10 @@ These are actual submitted alphas with real performance metrics. Use them as ins
                 'timestamp': result.timestamp
             })
             
+            # Track alpha result for persona performance
+            persona_used = getattr(self, 'current_persona', 'unknown')
+            self._track_alpha_result(result, persona_used)
+            
             # Also add to templates section (only successful templates)
             if region not in self.all_results['templates']:
                 self.all_results['templates'][region] = []
@@ -8036,6 +9042,286 @@ These are actual submitted alphas with real performance metrics. Use them as ins
             }
         
         return analysis
+    
+    def check_and_cleanup(self):
+        """Check if it's time for cleanup and perform cleanup if needed"""
+        if not self.cleanup_enabled:
+            return
+            
+        current_time = time.time()
+        if current_time - self.last_cleanup_time >= self.cleanup_interval:
+            logger.info(f"🧹 CLEANUP TIME: Starting periodic cleanup (every {self.cleanup_interval//60} minutes)")
+            self.perform_cleanup()
+            self.last_cleanup_time = current_time
+    
+    def perform_cleanup(self):
+        """Perform comprehensive cleanup of logs, temporary files, and old data"""
+        try:
+            cleanup_stats = {
+                'files_removed': 0,
+                'logs_cleared': 0,
+                'data_cleaned': 0,
+                'space_saved': 0
+            }
+            
+            # 1. Clean up large JSON files that accumulate data
+            large_json_files = [
+                'alpha_tracking.json',
+                'dynamic_personas.json', 
+                'template_progress_v2.json',
+                'enhanced_results_v2.json'
+            ]
+            
+            for json_file in large_json_files:
+                if os.path.exists(json_file):
+                    try:
+                        # Get file size before cleanup
+                        file_size_before = os.path.getsize(json_file)
+                        
+                        # Create a minimal version of the file
+                        if json_file == 'alpha_tracking.json':
+                            # Keep only essential structure for alpha tracking
+                            minimal_data = {
+                                "metadata": {
+                                    "last_cleanup": time.strftime('%Y-%m-%d %H:%M:%S'),
+                                    "version": "2.0"
+                                },
+                                "alphas": []
+                            }
+                        elif json_file == 'dynamic_personas.json':
+                            # COMPLETELY DELETE the file - no data retention
+                            try:
+                                if os.path.exists(json_file):
+                                    os.remove(json_file)
+                                    logger.info(f"🗑️ DELETED: {json_file}")
+                                minimal_data = None  # File deleted, no data to write
+                            except Exception as e:
+                                logger.warning(f"⚠️ Failed to delete {json_file}: {e}")
+                                minimal_data = None
+                        elif json_file == 'template_progress_v2.json':
+                            # COMPLETELY DELETE the file - no data retention
+                            try:
+                                if os.path.exists(json_file):
+                                    os.remove(json_file)
+                                    logger.info(f"🗑️ DELETED: {json_file}")
+                                minimal_data = None  # File deleted, no data to write
+                            except Exception as e:
+                                logger.warning(f"⚠️ Failed to delete {json_file}: {e}")
+                                minimal_data = None
+                        elif json_file == 'enhanced_results_v2.json':
+                            # COMPLETELY DELETE the file - no data retention
+                            try:
+                                if os.path.exists(json_file):
+                                    os.remove(json_file)
+                                    logger.info(f"🗑️ DELETED: {json_file}")
+                                minimal_data = None  # File deleted, no data to write
+                            except Exception as e:
+                                logger.warning(f"⚠️ Failed to delete {json_file}: {e}")
+                                minimal_data = None
+                        else:
+                            # For other JSON files, create minimal structure
+                            minimal_data = {
+                                "last_cleanup": time.strftime('%Y-%m-%d %H:%M:%S'),
+                                "data": []
+                            }
+                        
+                        # Write minimal data back to file (only if file wasn't deleted)
+                        if minimal_data is not None:
+                            with open(json_file, 'w', encoding='utf-8') as f:
+                                json.dump(minimal_data, f, indent=2, ensure_ascii=False)
+                            
+                            # Calculate space saved
+                            file_size_after = os.path.getsize(json_file)
+                            space_saved = file_size_before - file_size_after
+                            cleanup_stats['space_saved'] += space_saved
+                            
+                            cleanup_stats['logs_cleared'] += 1
+                            logger.info(f"🧹 Cleaned {json_file}: {file_size_before/1024/1024:.1f}MB -> {file_size_after/1024/1024:.1f}MB (saved {space_saved/1024/1024:.1f}MB)")
+                        else:
+                            # File was completely deleted
+                            space_saved = file_size_before
+                            cleanup_stats['space_saved'] += space_saved
+                            cleanup_stats['logs_cleared'] += 1
+                            logger.info(f"🗑️ DELETED {json_file}: {file_size_before/1024/1024:.1f}MB -> 0.0MB (saved {space_saved/1024/1024:.1f}MB)")
+                        
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to clean {json_file}: {e}")
+            
+            # 2. Clean up log files
+            log_files = [
+                'enhanced_template_generator_v2.log',
+                'template_generator.log',
+                'ollama.log',
+                'simulation.log'
+            ]
+            
+            for log_file in log_files:
+                if os.path.exists(log_file):
+                    try:
+                        # Truncate log file instead of deleting
+                        with open(log_file, 'w') as f:
+                            f.write(f"# Log cleared at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                        cleanup_stats['logs_cleared'] += 1
+                        logger.info(f"🧹 Cleared log file: {log_file}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to clear log {log_file}: {e}")
+            
+            # 3. Clean up temporary files
+            temp_patterns = [
+                '*.tmp',
+                '*.temp',
+                'temp_*',
+                'tmp_*',
+                '*_temp.json',
+                '*_tmp.json'
+            ]
+            
+            for pattern in temp_patterns:
+                try:
+                    import glob
+                    temp_files = glob.glob(pattern)
+                    for temp_file in temp_files:
+                        if os.path.exists(temp_file):
+                            os.remove(temp_file)
+                            cleanup_stats['files_removed'] += 1
+                            logger.info(f"🧹 Removed temp file: {temp_file}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to clean temp files with pattern {pattern}: {e}")
+            
+            # 4. Clean up old correlation data and PnL signals
+            if hasattr(self, 'pnl_signals') and len(self.pnl_signals) > 100:
+                # Keep only the last 50 signals
+                self.pnl_signals = self.pnl_signals[-50:]
+                cleanup_stats['data_cleaned'] += 1
+                logger.info(f"🧹 Trimmed PnL signals to last 50")
+            
+            if hasattr(self, 'correlation_results') and len(self.correlation_results) > 200:
+                # Keep only the last 100 correlation results
+                self.correlation_results = self.correlation_results[-100:]
+                cleanup_stats['data_cleaned'] += 1
+                logger.info(f"🧹 Trimmed correlation results to last 100")
+            
+            # 5. Clean up old template quality tracker data
+            if hasattr(self, 'template_quality_tracker'):
+                # Remove entries older than 1 hour
+                current_time = time.time()
+                old_entries = []
+                for template_hash, tracker in self.template_quality_tracker.items():
+                    if current_time - tracker.get('last_updated', 0) > 3600:  # 1 hour
+                        old_entries.append(template_hash)
+                
+                for template_hash in old_entries:
+                    del self.template_quality_tracker[template_hash]
+                
+                if old_entries:
+                    cleanup_stats['data_cleaned'] += 1
+                    logger.info(f"🧹 Removed {len(old_entries)} old template quality entries")
+            
+            # 6. Clean up old suspicion scores
+            if hasattr(self, 'pnl_check_stats') and 'suspicion_scores' in self.pnl_check_stats:
+                if len(self.pnl_check_stats['suspicion_scores']) > 1000:
+                    # Keep only the last 500 scores
+                    self.pnl_check_stats['suspicion_scores'] = self.pnl_check_stats['suspicion_scores'][-500:]
+                    cleanup_stats['data_cleaned'] += 1
+                    logger.info(f"🧹 Trimmed suspicion scores to last 500")
+            
+            # 7. Clean up old alpha results
+            if hasattr(self, 'alpha_results') and len(self.alpha_results) > 200:
+                # Keep only the last 100 alpha results
+                self.alpha_results = self.alpha_results[-100:]
+                cleanup_stats['data_cleaned'] += 1
+                logger.info(f"🧹 Trimmed alpha results to last 100")
+            
+            # 8. Clean up old hopeful alphas
+            if hasattr(self, 'hopeful_alphas') and len(self.hopeful_alphas) > 50:
+                # Keep only the last 20 hopeful alphas
+                self.hopeful_alphas = self.hopeful_alphas[-20:]
+                cleanup_stats['data_cleaned'] += 1
+                logger.info(f"🧹 Trimmed hopeful alphas to last 20")
+            
+            # Log cleanup summary
+            logger.info(f"🧹 CLEANUP COMPLETE:")
+            logger.info(f"   📄 Files cleaned: {cleanup_stats['logs_cleared']}")
+            logger.info(f"   🗑️ Files removed: {cleanup_stats['files_removed']}")
+            logger.info(f"   📊 Data cleaned: {cleanup_stats['data_cleaned']}")
+            logger.info(f"   💾 Space saved: {cleanup_stats['space_saved']/1024/1024:.1f}MB")
+            logger.info(f"   ⏰ Next cleanup in {self.cleanup_interval//60} minutes")
+            
+        except Exception as e:
+            logger.error(f"❌ CLEANUP FAILED: {e}")
+            import traceback
+            logger.error(f"❌ Cleanup traceback: {traceback.format_exc()}")
+    
+    def configure_cleanup(self, enabled: bool = True, interval_minutes: int = 30):
+        """Configure the cleanup system"""
+        self.cleanup_enabled = enabled
+        self.cleanup_interval = interval_minutes * 60  # Convert to seconds
+        
+        logger.info(f"🧹 CLEANUP CONFIG: Enabled={enabled}, Interval={interval_minutes} minutes")
+    
+    def force_cleanup(self):
+        """Force an immediate cleanup"""
+        logger.info("🧹 FORCE CLEANUP: Performing immediate cleanup")
+        self.perform_cleanup()
+        
+        # Clear in-memory variables to prevent file recreation
+        self._clear_memory_variables()
+        self.last_cleanup_time = time.time()
+    
+    def _clear_memory_variables(self):
+        """Clear in-memory variables that cause file recreation"""
+        logger.info("🧹 CLEARING MEMORY VARIABLES")
+        
+        # Clear dynamic personas (causes dynamic_personas.json recreation)
+        if hasattr(self, 'dynamic_personas'):
+            original_count = len(self.dynamic_personas)
+            self.dynamic_personas = []  # Clear the list
+            logger.info(f"🗑️ Cleared {original_count} dynamic personas from memory")
+        
+        # Clear alpha results (causes alpha_tracking.json recreation)
+        if hasattr(self, 'alpha_results'):
+            original_count = len(self.alpha_results)
+            self.alpha_results = []  # Clear the list
+            logger.info(f"🗑️ Cleared {original_count} alpha results from memory")
+        
+        # Clear template progress data (causes template_progress_v2.json recreation)
+        if hasattr(self, 'all_results'):
+            if 'simulation_results' in self.all_results:
+                for region in self.all_results['simulation_results']:
+                    original_count = len(self.all_results['simulation_results'][region])
+                    self.all_results['simulation_results'][region] = []  # Clear simulation results
+                    logger.info(f"🗑️ Cleared {original_count} simulation results for {region}")
+            
+            if 'templates' in self.all_results:
+                for region in self.all_results['templates']:
+                    original_count = len(self.all_results['templates'][region])
+                    self.all_results['templates'][region] = []  # Clear templates
+                    logger.info(f"🗑️ Cleared {original_count} templates for {region}")
+        
+        # Clear PnL signals and correlation data
+        if hasattr(self, 'pnl_signals'):
+            original_count = len(self.pnl_signals)
+            self.pnl_signals = []
+            logger.info(f"🗑️ Cleared {original_count} PnL signals from memory")
+        
+        if hasattr(self, 'correlation_results'):
+            original_count = len(self.correlation_results)
+            self.correlation_results = []
+            logger.info(f"🗑️ Cleared {original_count} correlation results from memory")
+        
+        # Clear template quality tracker
+        if hasattr(self, 'template_quality_tracker'):
+            original_count = len(self.template_quality_tracker)
+            self.template_quality_tracker = {}  # Should be a dictionary, not a list
+            logger.info(f"🗑️ Cleared {original_count} template quality entries from memory")
+        
+        # Clear PnL check stats
+        if hasattr(self, 'pnl_check_stats') and 'suspicion_scores' in self.pnl_check_stats:
+            original_count = len(self.pnl_check_stats['suspicion_scores'])
+            self.pnl_check_stats['suspicion_scores'] = []
+            logger.info(f"🗑️ Cleared {original_count} PnL suspicion scores from memory")
+        
+        logger.info("✅ MEMORY CLEANUP COMPLETE: All data structures cleared to prevent file recreation")
    
     def save_results(self, results: Dict, filename: str = None):
         """Save results to JSON file"""

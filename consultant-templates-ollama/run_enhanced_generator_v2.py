@@ -111,6 +111,11 @@ def main():
             results_file=results_file
         )
         
+        # Force cleanup on startup to ensure clean slate
+        print("🧹 Performing startup cleanup...")
+        generator.force_cleanup()
+        print("✅ Startup cleanup completed")
+        
         # Configuration
         all_regions = ['USA', 'GLB', 'EUR', 'ASI', 'CHN']
         
