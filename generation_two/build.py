@@ -45,7 +45,7 @@ def build_windows_exe():
             # Create constants directory and copy file
             constants_file.parent.mkdir(exist_ok=True, parents=True)
             shutil.copy2(root_constants, constants_file)
-            print(f"✓ Copied constants file from root: {root_constants} -> {constants_file}")
+            print(f"[OK] Copied constants file from root: {root_constants} -> {constants_file}")
         else:
             raise FileNotFoundError(f"Constants file not found in {constants_file} or {root_constants}")
     
@@ -142,9 +142,9 @@ exe = EXE(
     if exe_path.exists():
         target_path.parent.mkdir(exist_ok=True, parents=True)
         shutil.move(str(exe_path), str(target_path))
-        print(f"✅ Windows EXE built: {target_path}")
+        print(f"[OK] Windows EXE built: {target_path}")
     else:
-        print(f"❌ EXE not found in expected location: {exe_path}")
+        print(f"[ERROR] EXE not found in expected location: {exe_path}")
 
 def build_linux_deb():
     """Build Debian package"""
@@ -157,14 +157,29 @@ def build_linux_deb():
     run_command([sys.executable, "-m", "pip", "install", "stdeb"], check=False)
     
     # Build source distribution
-    # setup.py is in generation_two/ but needs to be run from project root
+    # setup.py is in generation_two/ but needs to be at root for stdeb
     print("Building source distribution...")
     setup_py = SCRIPT_DIR / "setup.py"
     if not setup_py.exists():
         raise FileNotFoundError(f"setup.py not found: {setup_py}")
     
-    # Run setup.py from project root so it can find the generation_two package
-    run_command([sys.executable, str(setup_py), "sdist"], cwd=PROJECT_ROOT)
+    # Copy setup.py to project root temporarily (stdeb needs it at root of distribution)
+    root_setup_py = PROJECT_ROOT / "setup.py"
+    if not root_setup_py.exists():
+        shutil.copy2(setup_py, root_setup_py)
+        print(f"[OK] Copied setup.py to project root for source distribution")
+        cleanup_setup = True
+    else:
+        cleanup_setup = False
+    
+    try:
+        # Run setup.py from project root so it can find the generation_two package
+        run_command([sys.executable, str(root_setup_py), "sdist"], cwd=PROJECT_ROOT)
+    finally:
+        # Clean up temporary setup.py if we created it
+        if cleanup_setup and root_setup_py.exists():
+            root_setup_py.unlink()
+            print(f"[OK] Cleaned up temporary setup.py from project root")
     
     # Convert to deb
     print("Converting to DEB...")
@@ -173,12 +188,12 @@ def build_linux_deb():
     # Try both patterns: generation_two (underscore) and generation-two (hyphen)
     tar_files = list(dist_dir.glob("generation_two-*.tar.gz")) + list(dist_dir.glob("generation-two-*.tar.gz"))
     if not tar_files:
-        print(f"❌ Source distribution not found in {dist_dir}")
+        print(f"[ERROR] Source distribution not found in {dist_dir}")
         print(f"   Files in dist: {list(dist_dir.glob('*')) if dist_dir.exists() else 'dist/ does not exist'}")
         return
     
     tar_file = tar_files[0]
-    print(f"✓ Found source distribution: {tar_file}")
+    print(f"[OK] Found source distribution: {tar_file}")
     # Use stdeb to convert tar.gz to deb
     # Try py2dsc-deb command first (installed by stdeb)
     py2dsc_deb_cmd = shutil.which("py2dsc-deb")
@@ -186,7 +201,7 @@ def build_linux_deb():
         run_command([py2dsc_deb_cmd, str(tar_file.name)], cwd=dist_dir)
     else:
         # Fallback: use Python module (stdeb.command.py2dsc_deb can be called as module)
-        print("⚠️  py2dsc-deb not in PATH, trying Python module...")
+        print("[WARN] py2dsc-deb not in PATH, trying Python module...")
         try:
             # Try using python -m stdeb.command.py2dsc_deb
             run_command(
@@ -194,7 +209,7 @@ def build_linux_deb():
                 cwd=dist_dir
             )
         except Exception as e:
-            print(f"⚠️  Module approach failed: {e}")
+            print(f"[WARN] Module approach failed: {e}")
             print("   Trying direct API call...")
             # Last resort: use stdeb API directly
             import tarfile
@@ -231,7 +246,7 @@ def build_linux_deb():
                     for deb_file in deb_dist.rglob("*.deb"):
                         target_deb = dist_dir / deb_file.name
                         shutil.move(str(deb_file), str(target_deb))
-                        print(f"  ✓ Moved DEB: {target_deb}")
+                        print(f"  [OK] Moved DEB: {target_deb}")
                 else:
                     raise FileNotFoundError(f"deb_dist not found in {package_dir}")
     
@@ -257,9 +272,9 @@ def build_linux_deb():
         target_path = SCRIPT_DIR / "dist" / deb_file.name
         target_path.parent.mkdir(exist_ok=True, parents=True)
         shutil.move(str(deb_file), str(target_path))
-        print(f"✅ Linux DEB built: {target_path}")
+        print(f"[OK] Linux DEB built: {target_path}")
     else:
-        print("❌ DEB file not found")
+        print("[ERROR] DEB file not found")
         print(f"   Searched in: {deb_dist_dir}")
         print(f"   And recursively in: {PROJECT_ROOT}")
         if deb_dist_dir.exists():
@@ -274,7 +289,7 @@ def build_macos_dmg():
     print("="*60)
     
     if sys.platform != "darwin":
-        print("⚠️  DMG can only be built on macOS")
+        print("[WARN] DMG can only be built on macOS")
         return
     
     # Install PyInstaller if not available
@@ -295,16 +310,16 @@ def build_macos_dmg():
             # Create constants directory and copy file
             constants_file.parent.mkdir(exist_ok=True, parents=True)
             shutil.copy2(root_constants, constants_file)
-            print(f"✓ Copied constants file from root: {root_constants} -> {constants_file}")
+            print(f"[OK] Copied constants file from root: {root_constants} -> {constants_file}")
         else:
-            print(f"❌ Constants file not found: {constants_file}")
+            print(f"[ERROR] Constants file not found: {constants_file}")
             print(f"   Also checked: {root_constants}")
             raise FileNotFoundError(f"Constants file not found in {constants_file} or {root_constants}")
     
     if not gui_script.exists():
         raise FileNotFoundError(f"GUI script not found: {gui_script}")
     
-    print(f"✓ Found constants file: {constants_file}")
+    print(f"[OK] Found constants file: {constants_file}")
     
     # Use absolute paths and ensure they're properly formatted
     gui_script_abs = gui_script.resolve()
@@ -387,13 +402,20 @@ app = BUNDLE(
     
     spec_file = PROJECT_ROOT / "generation_two_macos.spec"
     spec_file.write_text(spec_content)
-    print(f"✓ Created spec file: {spec_file}")
+    print(f"[OK] Created spec file: {spec_file}")
+    
+    # Clean the output directory first to avoid "not empty" error
+    app_output_dir = PROJECT_ROOT / "dist" / "GenerationTwo"
+    if app_output_dir.exists():
+        print(f"Cleaning existing app bundle: {app_output_dir}")
+        shutil.rmtree(app_output_dir)
     
     # Build app bundle using spec file
     # Note: Don't use --windowed flag when using a spec file - it's already in the spec
-    print(f"✓ Building with spec file: {spec_file}")
+    # Use -y flag to auto-remove output directory if it exists
+    print(f"[OK] Building with spec file: {spec_file}")
     run_command(
-        [sys.executable, "-m", "PyInstaller", "--clean", str(spec_file)],
+        [sys.executable, "-m", "PyInstaller", "--clean", "-y", str(spec_file)],
         cwd=PROJECT_ROOT
     )
     
@@ -403,13 +425,13 @@ app = BUNDLE(
     dmg_path = SCRIPT_DIR / "dist" / "generation-two.dmg"
     
     if not app_path.exists():
-        print(f"❌ App bundle not found: {app_path}")
+        print(f"[ERROR] App bundle not found: {app_path}")
         print(f"   Checking dist directory: {PROJECT_ROOT / 'dist'}")
         if (PROJECT_ROOT / "dist").exists():
             print(f"   Files in dist: {list((PROJECT_ROOT / 'dist').iterdir())}")
         raise FileNotFoundError(f"App bundle not found: {app_path}")
     
-    print(f"✓ Found app bundle: {app_path}")
+    print(f"[OK] Found app bundle: {app_path}")
     dmg_path.parent.mkdir(exist_ok=True, parents=True)
     
     # Try to create DMG
@@ -425,9 +447,9 @@ app = BUNDLE(
     ], check=False)
     
     if dmg_result and dmg_path.exists():
-        print(f"✅ macOS DMG built: {dmg_path}")
+        print(f"[OK] macOS DMG built: {dmg_path}")
     else:
-        print(f"⚠️  DMG creation may have failed, but app bundle is available at: {app_path}")
+        print(f"[WARN] DMG creation may have failed, but app bundle is available at: {app_path}")
         print("   You can manually create a DMG or distribute the .app bundle directly")
 
 def main():
@@ -457,7 +479,7 @@ def main():
     elif platform == "darwin":
         build_macos_dmg()
     else:
-        print(f"⚠️  Unknown platform: {platform}")
+        print(f"[WARN] Unknown platform: {platform}")
         print("Available build options:")
         print("  - Windows: python build.py --exe")
         print("  - Linux: python build.py --deb")
