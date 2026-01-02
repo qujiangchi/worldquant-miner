@@ -253,55 +253,55 @@ def build_linux_deb():
                 print(f"[WARN] py2dsc-deb command failed, trying fallback methods...")
                 py2dsc_deb_cmd = None  # Force fallback
         else:
-        # Fallback: use Python module (stdeb.command.py2dsc_deb can be called as module)
-        print("[WARN] py2dsc-deb not in PATH, trying Python module...")
-        try:
-            # Try using python -m stdeb.command.py2dsc_deb
-            run_command(
-                [sys.executable, "-m", "stdeb.command.py2dsc_deb", str(tar_file.name)],
-                cwd=dist_dir
-            )
-        except Exception as e:
-            print(f"[WARN] Module approach failed: {e}")
-            print("   Trying direct API call...")
-            # Last resort: use stdeb API directly
-            import tarfile
-            import tempfile
-            from stdeb.command import py2dsc_deb
-            
-            with tempfile.TemporaryDirectory() as tmpdir:
-                tmpdir_path = Path(tmpdir)
-                # Extract source distribution
-                with tarfile.open(tar_file, "r:gz") as tar:
-                    tar.extractall(tmpdir_path)
+            # Fallback: use Python module (stdeb.command.py2dsc_deb can be called as module)
+            print("[WARN] py2dsc-deb not in PATH, trying Python module...")
+            try:
+                # Try using python -m stdeb.command.py2dsc_deb
+                run_command(
+                    [sys.executable, "-m", "stdeb.command.py2dsc_deb", str(tar_file.name)],
+                    cwd=dist_dir
+                )
+            except Exception as e:
+                print(f"[WARN] Module approach failed: {e}")
+                print("   Trying direct API call...")
+                # Last resort: use stdeb API directly
+                import tarfile
+                import tempfile
+                from stdeb.command import py2dsc_deb
                 
-                # Find the extracted package directory
-                extracted_dirs = [d for d in tmpdir_path.iterdir() if d.is_dir() and (d / "setup.py").exists()]
-                if not extracted_dirs:
-                    raise FileNotFoundError("Could not find setup.py in extracted archive")
-                
-                package_dir = extracted_dirs[0]
-                print(f"  Building DEB from: {package_dir}")
-                
-                # Use stdeb to build deb
-                import os
-                old_cwd = os.getcwd()
-                try:
-                    os.chdir(str(package_dir))
-                    # py2dsc_deb.main() processes the current directory
-                    py2dsc_deb.main([])
-                finally:
-                    os.chdir(old_cwd)
-                
-                # Find and move resulting deb files
-                deb_dist = package_dir / "deb_dist"
-                if deb_dist.exists():
-                    for deb_file in deb_dist.rglob("*.deb"):
-                        target_deb = dist_dir / deb_file.name
-                        shutil.move(str(deb_file), str(target_deb))
-                        print(f"  [OK] Moved DEB: {target_deb}")
-                else:
-                    raise FileNotFoundError(f"deb_dist not found in {package_dir}")
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    tmpdir_path = Path(tmpdir)
+                    # Extract source distribution
+                    with tarfile.open(tar_file, "r:gz") as tar:
+                        tar.extractall(tmpdir_path)
+                    
+                    # Find the extracted package directory
+                    extracted_dirs = [d for d in tmpdir_path.iterdir() if d.is_dir() and (d / "setup.py").exists()]
+                    if not extracted_dirs:
+                        raise FileNotFoundError("Could not find setup.py in extracted archive")
+                    
+                    package_dir = extracted_dirs[0]
+                    print(f"  Building DEB from: {package_dir}")
+                    
+                    # Use stdeb to build deb
+                    import os
+                    old_cwd = os.getcwd()
+                    try:
+                        os.chdir(str(package_dir))
+                        # py2dsc_deb.main() processes the current directory
+                        py2dsc_deb.main([])
+                    finally:
+                        os.chdir(old_cwd)
+                    
+                    # Find and move resulting deb files
+                    deb_dist = package_dir / "deb_dist"
+                    if deb_dist.exists():
+                        for deb_file in deb_dist.rglob("*.deb"):
+                            target_deb = dist_dir / deb_file.name
+                            shutil.move(str(deb_file), str(target_deb))
+                            print(f"  [OK] Moved DEB: {target_deb}")
+                    else:
+                        raise FileNotFoundError(f"deb_dist not found in {package_dir}")
     
     # Find and move deb file
     # stdeb creates deb files in deb_dist/ subdirectory
