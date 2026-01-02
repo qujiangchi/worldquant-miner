@@ -31,6 +31,14 @@ jobs:
           cd generation_two
           pip install -r requirements.txt
 
+      - name: Copy constants file if needed
+        run: |
+          if [ ! -f "generation_two/constants/operatorRAW.json" ] && [ -f "constants/operatorRAW.json" ]; then
+            mkdir -p generation_two/constants
+            cp constants/operatorRAW.json generation_two/constants/
+            echo "✓ Copied constants file from root"
+          fi
+
       - name: Build EXE
         run: |
           cd generation_two
@@ -67,6 +75,14 @@ jobs:
           cd generation_two
           pip install -r requirements.txt
 
+      - name: Copy constants file if needed
+        run: |
+          if [ ! -f "generation_two/constants/operatorRAW.json" ] && [ -f "constants/operatorRAW.json" ]; then
+            mkdir -p generation_two/constants
+            cp constants/operatorRAW.json generation_two/constants/
+            echo "✓ Copied constants file from root"
+          fi
+
       - name: Build DEB
         run: |
           cd generation_two
@@ -98,6 +114,14 @@ jobs:
           brew install create-dmg || true
           cd generation_two
           pip install -r requirements.txt
+
+      - name: Copy constants file if needed
+        run: |
+          if [ ! -f "generation_two/constants/operatorRAW.json" ] && [ -f "constants/operatorRAW.json" ]; then
+            mkdir -p generation_two/constants
+            cp constants/operatorRAW.json generation_two/constants/
+            echo "✓ Copied constants file from root"
+          fi
 
       - name: Build DMG
         run: |

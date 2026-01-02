@@ -40,6 +40,8 @@ MT5/
 AI-Trader-main/
 refly-main/
 constants/
+# But allow operatorRAW.json for builds
+!generation_two/constants/operatorRAW.json
 
 # Database files
 **.db

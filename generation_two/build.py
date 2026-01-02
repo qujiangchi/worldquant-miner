@@ -38,10 +38,19 @@ def build_windows_exe():
     gui_script = SCRIPT_DIR / "gui" / "run_gui.py"
     constants_file = SCRIPT_DIR / "constants" / "operatorRAW.json"
     
+    # Check if constants file exists, if not try root constants directory
+    if not constants_file.exists():
+        root_constants = PROJECT_ROOT / "constants" / "operatorRAW.json"
+        if root_constants.exists():
+            # Create constants directory and copy file
+            constants_file.parent.mkdir(exist_ok=True, parents=True)
+            shutil.copy2(root_constants, constants_file)
+            print(f"✓ Copied constants file from root: {root_constants} -> {constants_file}")
+        else:
+            raise FileNotFoundError(f"Constants file not found in {constants_file} or {root_constants}")
+    
     if not gui_script.exists():
         raise FileNotFoundError(f"GUI script not found: {gui_script}")
-    if not constants_file.exists():
-        raise FileNotFoundError(f"Constants file not found: {constants_file}")
     
     # Use absolute paths and ensure they're properly formatted
     # Convert to string and normalize (use forward slashes for PyInstaller compatibility)
@@ -203,14 +212,21 @@ def build_macos_dmg():
     gui_script = SCRIPT_DIR / "gui" / "run_gui.py"
     constants_file = SCRIPT_DIR / "constants" / "operatorRAW.json"
     
+    # Check if constants file exists, if not try root constants directory
+    if not constants_file.exists():
+        root_constants = PROJECT_ROOT / "constants" / "operatorRAW.json"
+        if root_constants.exists():
+            # Create constants directory and copy file
+            constants_file.parent.mkdir(exist_ok=True, parents=True)
+            shutil.copy2(root_constants, constants_file)
+            print(f"✓ Copied constants file from root: {root_constants} -> {constants_file}")
+        else:
+            print(f"❌ Constants file not found: {constants_file}")
+            print(f"   Also checked: {root_constants}")
+            raise FileNotFoundError(f"Constants file not found in {constants_file} or {root_constants}")
+    
     if not gui_script.exists():
         raise FileNotFoundError(f"GUI script not found: {gui_script}")
-    if not constants_file.exists():
-        print(f"❌ Constants file not found: {constants_file}")
-        print(f"   Looking in: {SCRIPT_DIR}")
-        if SCRIPT_DIR.exists():
-            print(f"   Available files in constants/: {list((SCRIPT_DIR / 'constants').glob('*')) if (SCRIPT_DIR / 'constants').exists() else 'constants/ does not exist'}")
-        raise FileNotFoundError(f"Constants file not found: {constants_file}")
     
     print(f"✓ Found constants file: {constants_file}")
     
