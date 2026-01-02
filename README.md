@@ -65,6 +65,37 @@ cargo run --release
 
 This is a Python implementation of the alpha generator.
 
+## 🚀 **Generation Two: Advanced Alpha Mining System**
+
+**Generation Two** is a self-optimizing, modular alpha mining system with advanced features:
+
+- 🧬 **Self-Optimization**: Adaptive parameter tuning based on performance
+- 🔄 **Genetic Evolution**: Genetic algorithm-based alpha evolution
+- ⚡ **Continuous Mining**: Automated 24/7 alpha discovery with error correction
+- 🎨 **Cyberpunk GUI**: Modern graphical interface for system control
+- 🤖 **Smart Ollama Integration**: Local LLM with automatic fallback
+- ✅ **Template Validation**: Self-correcting AST with error learning
+- 📊 **Expression Compiler**: Multi-stage compilation pipeline
+- 🔍 **Quality Monitoring**: Performance tracking and degradation detection
+
+**Quick Start:**
+```bash
+cd generation_two
+pip install -r requirements.txt
+python gui/run_gui.py [credential_path]
+```
+
+**Documentation:** See [generation_two/DOCUMENTATION.md](generation_two/DOCUMENTATION.md) for complete documentation.
+
+**Key Features:**
+- Modular architecture with separated concerns
+- Concurrent simulation execution
+- Automated error correction and template fixing
+- Field placeholder replacement (DATA_FIELD1 → actual fields)
+- Infinite retry for critical errors
+- Real-time progress monitoring
+- Build support for Windows (EXE), Linux (DEB), macOS (DMG)
+
 ## Introduction: Difference between Pre-Consultant and Consultant
 
 - Pre-Consultant has maximum 5 concurrent simulations

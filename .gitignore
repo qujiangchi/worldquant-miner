@@ -29,5 +29,32 @@ data_fields_cache_*.json
 
 credentials.json
 credential.json
+**/credential.txt
+**/credentials.txt
+**/credential.json
+**/credentials.json
 
 submitted_alpha.json
+
+MT5/
+AI-Trader-main/
+refly-main/
+constants/
+
+# Database files
+**.db
+*.db-journal
+*.db-shm
+*.db-wal
+generation_two_backtests.db*
+
+# Build artifacts
+dist/
+build/
+*.spec
+*.exe
+*.deb
+*.dmg
+*.rpm
+*.tar.gz
+*.zip
