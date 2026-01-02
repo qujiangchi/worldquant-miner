@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { getStoredJWT } from '@/lib/auth';
 
 export async function POST(request: Request) {
   const { searchParams } = new URL(request.url);

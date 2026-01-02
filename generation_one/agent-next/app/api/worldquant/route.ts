@@ -1,44 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getStoredCredentials } from '@/lib/auth';
+import { cookies } from 'next/headers';
 
 // Base URL for WorldQuant Brain API
 const API_BASE_URL = 'https://api.worldquantbrain.com';
-
-// Helper function to make authenticated requests to WorldQuant API
-async function makeWorldQuantRequest(endpoint: string, params: Record<string, any> = {}) {
-  const credentials = getStoredCredentials();
-  
-  if (!credentials) {
-    throw new Error('Authentication required');
-  }
-  
-  // Create base64 encoded auth string
-  const authString = `${credentials.username}:${credentials.password}`;
-  const base64Auth = Buffer.from(authString).toString('base64');
-  
-  const url = new URL(`${API_BASE_URL}${endpoint}`);
-  
-  // Add query parameters
-  Object.entries(params).forEach(([key, value]) => {
-    if (value !== undefined && value !== null) {
-      url.searchParams.append(key, String(value));
-    }
-  });
-  
-  const response = await fetch(url.toString(), {
-    headers: {
-      'Authorization': `Basic ${base64Auth}`,
-      'Content-Type': 'application/json',
-    },
-  });
-  
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`WorldQuant API error: ${response.status} ${errorText}`);
-  }
-  
-  return response.json();
-}
 
 // GET handler for data fields
 export async function GET(request: NextRequest) {

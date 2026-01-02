@@ -1,4 +1,4 @@
-import { cookies } from 'next/headers';
+'use client';
 
 export interface WorldQuantCredentials {
   username: string;
