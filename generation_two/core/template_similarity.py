@@ -1,0 +1,180 @@
+"""
+Template Similarity Checker
+Checks similarity between templates to avoid duplicates
+"""
+
+import logging
+import re
+import hashlib
+from typing import List, Dict, Set, Tuple
+from difflib import SequenceMatcher
+
+logger = logging.getLogger(__name__)
+
+
+class TemplateSimilarityChecker:
+    """
+    Checks similarity between templates using multiple methods:
+    1. String similarity (Levenshtein-like)
+    2. Operator overlap
+    3. Field overlap
+    4. Structural similarity (AST-based)
+    """
+    
+    def __init__(self, similarity_threshold: float = 0.7):
+        """
+        Initialize similarity checker
+        
+        Args:
+            similarity_threshold: Threshold for considering templates similar (0.0-1.0)
+        """
+        self.similarity_threshold = similarity_threshold
+    
+    def extract_operators(self, template: str) -> Set[str]:
+        """Extract operator names from template"""
+        operators = set()
+        
+        # Common operators pattern
+        operator_patterns = [
+            r'\b(ts_\w+)',  # Time series operators (ts_rank, ts_delta, etc.)
+            r'\b(winsorize|zscore|rank|delta|correlation|add|subtract|multiply|divide|power|signed_power|abs|log|sqrt|inverse|min|max|sign|reverse)',
+            r'\b(vec_\w+)',  # Vector operators
+            r'\b(group_\w+)',  # Group operators
+        ]
+        
+        for pattern in operator_patterns:
+            matches = re.findall(pattern, template)
+            operators.update(matches)
+        
+        return operators
+    
+    def extract_fields(self, template: str) -> Set[str]:
+        """Extract field IDs from template"""
+        fields = set()
+        
+        # Field pattern: alphanumeric with underscores (like anl49_1stfiscalquarterearningspershare)
+        field_pattern = r'\b([a-z][a-z0-9_]{10,})\b'
+        matches = re.findall(field_pattern, template)
+        
+        # Filter out operators and common keywords
+        excluded = {
+            'ts_rank', 'ts_delta', 'ts_mean', 'ts_std', 'ts_sum', 'ts_min', 'ts_max',
+            'winsorize', 'zscore', 'rank', 'delta', 'correlation', 'add', 'subtract',
+            'multiply', 'divide', 'power', 'signed_power', 'abs', 'log', 'sqrt', 'inverse',
+            'min', 'max', 'sign', 'reverse', 'true', 'false', 'filter'
+        }
+        
+        for match in matches:
+            if match not in excluded and len(match) > 10:  # Field IDs are typically long
+                fields.add(match)
+        
+        return fields
+    
+    def calculate_string_similarity(self, template1: str, template2: str) -> float:
+        """Calculate string similarity using SequenceMatcher"""
+        return SequenceMatcher(None, template1, template2).ratio()
+    
+    def calculate_operator_overlap(self, template1: str, template2: str) -> float:
+        """Calculate operator overlap ratio"""
+        ops1 = self.extract_operators(template1)
+        ops2 = self.extract_operators(template2)
+        
+        if not ops1 and not ops2:
+            return 1.0  # Both have no operators
+        if not ops1 or not ops2:
+            return 0.0  # One has operators, other doesn't
+        
+        intersection = ops1.intersection(ops2)
+        union = ops1.union(ops2)
+        
+        return len(intersection) / len(union) if union else 0.0
+    
+    def calculate_field_overlap(self, template1: str, template2: str) -> float:
+        """Calculate field overlap ratio"""
+        fields1 = self.extract_fields(template1)
+        fields2 = self.extract_fields(template2)
+        
+        if not fields1 and not fields2:
+            return 1.0  # Both have no fields
+        if not fields1 or not fields2:
+            return 0.0  # One has fields, other doesn't
+        
+        intersection = fields1.intersection(fields2)
+        union = fields1.union(fields2)
+        
+        return len(intersection) / len(union) if union else 0.0
+    
+    def calculate_structural_similarity(self, template1: str, template2: str) -> float:
+        """Calculate structural similarity (operator pattern)"""
+        ops1 = sorted(list(self.extract_operators(template1)))
+        ops2 = sorted(list(self.extract_operators(template2)))
+        
+        if not ops1 and not ops2:
+            return 1.0
+        if not ops1 or not ops2:
+            return 0.0
+        
+        # Compare operator sequences
+        ops1_str = '|'.join(ops1)
+        ops2_str = '|'.join(ops2)
+        
+        return SequenceMatcher(None, ops1_str, ops2_str).ratio()
+    
+    def calculate_similarity(self, template1: str, template2: str) -> float:
+        """
+        Calculate overall similarity score (0.0-1.0)
+        
+        Combines multiple similarity metrics:
+        - String similarity (40%)
+        - Operator overlap (30%)
+        - Field overlap (20%)
+        - Structural similarity (10%)
+        """
+        string_sim = self.calculate_string_similarity(template1, template2)
+        operator_sim = self.calculate_operator_overlap(template1, template2)
+        field_sim = self.calculate_field_overlap(template1, template2)
+        structural_sim = self.calculate_structural_similarity(template1, template2)
+        
+        # Weighted combination
+        overall_sim = (
+            string_sim * 0.4 +
+            operator_sim * 0.3 +
+            field_sim * 0.2 +
+            structural_sim * 0.1
+        )
+        
+        return overall_sim
+    
+    def is_similar(self, template1: str, template2: str) -> bool:
+        """Check if two templates are similar"""
+        similarity = self.calculate_similarity(template1, template2)
+        return similarity >= self.similarity_threshold
+    
+    def find_similar_templates(
+        self, 
+        new_template: str, 
+        existing_templates: List[str]
+    ) -> List[Tuple[str, float]]:
+        """
+        Find similar templates from a list
+        
+        Returns:
+            List of (template, similarity_score) tuples, sorted by similarity (highest first)
+        """
+        similar = []
+        
+        for existing in existing_templates:
+            similarity = self.calculate_similarity(new_template, existing)
+            if similarity >= self.similarity_threshold:
+                similar.append((existing, similarity))
+        
+        # Sort by similarity (highest first)
+        similar.sort(key=lambda x: x[1], reverse=True)
+        
+        return similar
+    
+    def get_template_hash(self, template: str) -> str:
+        """Get hash of template for quick duplicate detection"""
+        # Normalize template (remove extra spaces, lowercase)
+        normalized = re.sub(r'\s+', ' ', template.strip().lower())
+        return hashlib.md5(normalized.encode()).hexdigest()

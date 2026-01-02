@@ -1,0 +1,991 @@
+\chapter{基于OCaml的回测与执行：从Alpha表达式到市场行动}
+\label{chap:ocaml-execution}
+
+\section{概述}
+
+本章详细解释如何使用OCaml对Alpha表达式进行回测并转换为实际交易行动，遵循像Jane Street这样的公司使用的架构原则。我们涵盖从表达式评估到回测再到实盘执行的完整流水线。
+
+\section{Alpha表达式回测：详细过程}
+
+\subsection{表达式评估流水线}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+    node distance=1.2cm,
+    data/.style={ellipse, draw=orange!50, fill=orange!10, thick, minimum width=2cm, minimum height=0.8cm, text centered},
+    process/.style={rectangle, draw=blue!50, fill=blue!10, thick, minimum width=2.5cm, minimum height=0.8cm, text centered, rounded corners},
+    result/.style={rectangle, draw=green!50, fill=green!10, thick, minimum width=2.5cm, minimum height=0.8cm, text centered, rounded corners},
+    arrow/.style={->, >=stealth, thick}
+]
+    % Input
+    \node[data] (alpha) {Alpha\\Expression};
+    \node[data, below=of alpha] (market) {Market\\Data};
+    
+    % Processing
+    \node[process, right=of alpha, xshift=1cm] (parse) {Parse\\Expression};
+    \node[process, below=of parse] (evaluate) {Evaluate\\Tree};
+    \node[process, below=of evaluate] (normalize) {Normalize\\Signal};
+    
+    % Output
+    \node[result, right=of normalize, xshift=1cm] (signal) {Trading\\Signal};
+    \node[result, below=of signal] (position) {Target\\Position};
+    
+    % Arrows
+    \draw[arrow] (alpha) -> (parse);
+    \draw[arrow] (market) -> (evaluate);
+    \draw[arrow] (parse) -> (evaluate);
+    \draw[arrow] (evaluate) -> (normalize);
+    \draw[arrow] (normalize) -> (signal);
+    \draw[arrow] (signal) -> (position);
+\end{tikzpicture}
+\caption{Alpha表达式评估流水线}
+\label{fig:alpha-evaluation-pipeline}
+\end{figure}
+
+\subsection{步骤1：表达式解析}
+
+\begin{lstlisting}[style=ocaml, caption=Alpha表达式解析器]
+type alpha_expr =
+  | Field of string
+  | Operator of operator * alpha_expr list
+  | Constant of float
+
+type operator =
+  | TsRank | TsDelta | TsMean | TsSum
+  | GroupRank | GroupMean
+  | Log | Sqrt | Rank | Zscore
+
+(* Parse alpha expression string to AST *)
+let parse_alpha (s : string) : alpha_expr =
+  let open Angstrom in
+  let parse_field = take_while1 (function
+    | 'a'..'z' | 'A'..'Z' | '0'..'9' | '_' -> true
+    | _ -> false) in
+  
+  let parse_operator = choice [
+    string "ts_rank" *> return TsRank;
+    string "ts_delta" *> return TsDelta;
+    string "ts_mean" *> return TsMean;
+    string "log" *> return Log;
+    (* ... more operators ... *)
+  ] in
+  
+  fix (fun expr ->
+    choice [
+      parse_field >>= fun f -> return (Field f);
+      parse_operator >>= fun op ->
+        char '(' *>
+        sep_by (char ',') expr >>= fun args ->
+        char ')' *>
+        return (Operator (op, args));
+    ]) s
+\end{lstlisting}
+
+\subsection{步骤2：表达式求值}
+
+\begin{lstlisting}[style=ocaml, caption=表达式求值器]
+type market_data = {
+  timestamp : float;
+  symbols : string array;
+  fields : (string, float array) Hashtbl.t;
+}
+
+(* Evaluate alpha expression with market data *)
+let rec evaluate_expr (expr : alpha_expr) 
+                      (data : market_data) 
+                      (symbol_idx : int) : float =
+  match expr with
+  | Field name ->
+    (* Lookup field value for symbol *)
+    Hashtbl.find data.fields name).(symbol_idx)
+  
+  | Constant v -> v
+  
+  | Operator (op, args) ->
+    match op with
+    | TsRank ->
+      let arg1 = evaluate_expr (List.nth args 0) data symbol_idx in
+      let arg2 = evaluate_expr (List.nth args 1) data symbol_idx in
+      ts_rank arg1 (int_of_float arg2) data symbol_idx
+    
+    | TsDelta ->
+      let arg1 = evaluate_expr (List.nth args 0) data symbol_idx in
+      let arg2 = evaluate_expr (List.nth args 1) data symbol_idx in
+      ts_delta arg1 (int_of_float arg2) data symbol_idx
+    
+    | Log ->
+      let arg = evaluate_expr (List.nth args 0) data symbol_idx in
+      log arg
+    
+    | GroupRank ->
+      let arg1 = evaluate_expr (List.nth args 0) data symbol_idx in
+      let arg2 = evaluate_expr (List.nth args 1) data symbol_idx in
+      group_rank arg1 arg2 data symbol_idx
+    
+    (* ... more operators ... *)
+
+(* Time series operations *)
+let ts_rank (field : float array) (window : int) 
+            (data : market_data) (idx : int) : float =
+  let window_data = Array.sub field (max 0 (idx - window + 1)) 
+                                    (min window (idx + 1)) in
+  let sorted = Array.copy window_data in
+  Array.sort compare sorted;
+  let rank = ref 0 in
+  for i = 0 to Array.length sorted - 1 do
+    if sorted.(i) <= field.(idx) then incr rank
+  done;
+  float_of_int !rank /. float_of_int (Array.length sorted)
+
+let ts_delta (field : float array) (period : int) 
+             (data : market_data) (idx : int) : float =
+  if idx >= period then
+    field.(idx) -. field.(idx - period)
+  else
+    0.0
+\end{lstlisting}
+
+\subsection{步骤3：信号归一化}
+
+\begin{lstlisting}[style=ocaml, caption=信号归一化]
+type normalized_signal = {
+  value : float;  (* -1.0 to 1.0 *)
+  confidence : float;  (* 0.0 to 1.0 *)
+  direction : [`Long | `Short | `Neutral];
+}
+
+(* Normalize raw alpha signal to trading signal *)
+let normalize_signal (raw_signal : float) 
+                     (historical_stats : stats) : normalized_signal =
+  (* Z-score normalization *)
+  let z_score = (raw_signal -. historical_stats.mean) /. 
+                historical_stats.std_dev in
+  
+  (* Clamp to [-1, 1] range *)
+  let normalized = max (-1.0) (min 1.0 (z_score /. 3.0)) in
+  
+  (* Calculate confidence based on magnitude *)
+  let confidence = abs_float normalized in
+  
+  (* Determine direction *)
+  let direction = if normalized > 0.1 then `Long
+                 else if normalized < -0.1 then `Short
+                 else `Neutral in
+  
+  { value = normalized; confidence; direction }
+\end{lstlisting}
+
+\section{回测引擎：完整实现}
+
+\subsection{回测架构}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+    node distance=1cm,
+    component/.style={rectangle, draw=blue!50, fill=blue!10, thick, minimum width=2.5cm, minimum height=0.8cm, text centered, rounded corners},
+    data/.style={ellipse, draw=orange!50, fill=orange!10, thick, minimum width=2cm, minimum height=0.6cm, text centered},
+    arrow/.style={->, >=stealth, thick}
+]
+    % Components
+    \node[component] (data) {Historical\\Data};
+    \node[component, right=of data] (eval) {Expression\\Evaluator};
+    \node[component, right=of eval] (signal) {Signal\\Generator};
+    \node[component, below=of signal] (portfolio) {Portfolio\\Manager};
+    \node[component, left=of portfolio] (exec) {Execution\\Simulator};
+    \node[component, left=of exec] (metrics) {Performance\\Metrics};
+    
+    % Arrows
+    \draw[arrow] (data) -> (eval);
+    \draw[arrow] (eval) -> (signal);
+    \draw[arrow] (signal) -> (portfolio);
+    \draw[arrow] (portfolio) -> (exec);
+    \draw[arrow] (exec) -> (metrics);
+    \draw[arrow, dashed, bend right=30] (metrics) to node[below, font=\tiny] {Feedback} (portfolio);
+\end{tikzpicture}
+\caption{回测引擎架构}
+\label{fig:backtest-architecture}
+\end{figure}
+
+\subsection{完整回测实现}
+
+\begin{lstlisting}[style=ocaml, caption=完整回测引擎]
+type backtest_config = {
+  initial_capital : float;
+  commission_rate : float;
+  slippage_rate : float;
+  max_position_size : float;
+  rebalance_frequency : [`Daily | `Hourly | `Minute];
+}
+
+type position = {
+  symbol : string;
+  quantity : float;
+  entry_price : float;
+  entry_time : float;
+  current_value : float;
+}
+
+type portfolio = {
+  cash : float;
+  positions : (string, position) Hashtbl.t;
+  total_value : float;
+  trades : trade list;
+}
+
+type trade = {
+  symbol : string;
+  side : [`Buy | `Sell];
+  quantity : float;
+  price : float;
+  timestamp : float;
+  commission : float;
+  slippage : float;
+}
+
+(* Main backtesting function *)
+let backtest_alpha (alpha_expr : alpha_expr)
+                   (historical_data : market_data array)
+                   (config : backtest_config) : backtest_result =
+  
+  (* Initialize portfolio *)
+  let portfolio = {
+    cash = config.initial_capital;
+    positions = Hashtbl.create 100;
+    total_value = config.initial_capital;
+    trades = [];
+  } in
+  
+  (* Process each time step *)
+  let rec process_timestep (data : market_data) 
+                           (portfolio : portfolio) 
+                           (timestep : int) : portfolio =
+    
+    (* Evaluate alpha for all symbols *)
+    let signals = Array.mapi (fun idx symbol ->
+      let raw_signal = evaluate_expr alpha_expr data idx in
+      normalize_signal raw_signal (get_historical_stats data idx)
+    ) data.symbols in
+    
+    (* Calculate target positions *)
+    let target_positions = calculate_target_positions 
+                             signals portfolio config in
+    
+    (* Rebalance portfolio *)
+    let updated_portfolio = rebalance_portfolio 
+                              portfolio target_positions data config in
+    
+    (* Update portfolio value *)
+    let new_value = calculate_portfolio_value 
+                      updated_portfolio data in
+    
+    { updated_portfolio with total_value = new_value }
+  
+  in
+  
+  (* Run backtest *)
+  let final_portfolio = Array.fold_left process_timestep 
+                                        portfolio historical_data in
+  
+  (* Calculate performance metrics *)
+  calculate_performance_metrics final_portfolio config
+
+(* Calculate target positions from signals *)
+let calculate_target_positions (signals : normalized_signal array)
+                               (portfolio : portfolio)
+                               (config : backtest_config) 
+                               : (string * float) list =
+  
+  (* Sort by signal strength *)
+  let ranked = Array.mapi (fun idx signal ->
+    (portfolio.symbols.(idx), signal.value, signal.confidence)
+  ) signals in
+  
+  Array.sort (fun (_, v1, c1) (_, v2, c2) ->
+    compare (v2 *. c2) (v1 *. c1)) ranked;
+  
+  (* Allocate capital to top signals *)
+  let available_capital = portfolio.cash *. 0.95 in  (* 95% utilization *)
+  let positions = ref [] in
+  let remaining_capital = ref available_capital in
+  
+  for i = 0 to min (Array.length ranked - 1) 20 do  (* Top 20 *)
+    let symbol, signal_value, confidence = ranked.(i) in
+    if abs_float signal_value > 0.2 && confidence > 0.5 then
+      let allocation = !remaining_capital *. 
+                       (abs_float signal_value *. confidence) in
+      let quantity = allocation /. (get_current_price symbol) in
+      positions := (symbol, quantity *. (if signal_value > 0.0 then 1.0 else -1.0)) :: !positions;
+      remaining_capital := !remaining_capital -. allocation
+  done;
+  
+  List.rev !positions
+
+(* Rebalance portfolio to target positions *)
+let rebalance_portfolio (portfolio : portfolio)
+                        (target_positions : (string * float) list)
+                        (data : market_data)
+                        (config : backtest_config) : portfolio =
+  
+  let updated_positions = Hashtbl.copy portfolio.positions in
+  let updated_cash = ref portfolio.cash in
+  let updated_trades = ref portfolio.trades in
+  
+  (* Close positions not in target *)
+  Hashtbl.iter (fun symbol pos ->
+    if not (List.mem_assoc symbol target_positions) then
+      (* Close position *)
+      let current_price = get_price data symbol in
+      let proceeds = pos.quantity *. current_price in
+      let commission = proceeds *. config.commission_rate in
+      let slippage = abs_float pos.quantity *. current_price *. config.slippage_rate in
+      
+      updated_cash := !updated_cash +. proceeds -. commission -. slippage;
+      updated_trades := {
+        symbol; side = if pos.quantity > 0.0 then `Sell else `Buy;
+        quantity = abs_float pos.quantity; price = current_price;
+        timestamp = data.timestamp; commission; slippage
+      } :: !updated_trades;
+      
+      Hashtbl.remove updated_positions symbol
+  ) portfolio.positions;
+  
+  (* Open/adjust positions to target *)
+  List.iter (fun (symbol, target_quantity) ->
+    let current_price = get_price data symbol in
+    let current_pos = Hashtbl.find_opt updated_positions symbol in
+    
+    match current_pos with
+    | None ->
+      (* Open new position *)
+      if abs_float target_quantity > 0.001 then
+        let cost = target_quantity *. current_price in
+        let commission = abs_float cost *. config.commission_rate in
+        let slippage = abs_float target_quantity *. current_price *. config.slippage_rate in
+        
+        if !updated_cash >= cost +. commission +. slippage then
+          (updated_cash := !updated_cash -. cost -. commission -. slippage;
+           Hashtbl.add updated_positions symbol {
+             symbol; quantity = target_quantity;
+             entry_price = current_price; entry_time = data.timestamp;
+             current_value = target_quantity *. current_price
+           };
+           updated_trades := {
+             symbol; side = if target_quantity > 0.0 then `Buy else `Sell;
+             quantity = abs_float target_quantity; price = current_price;
+             timestamp = data.timestamp; commission; slippage
+           } :: !updated_trades)
+    
+    | Some pos ->
+      (* Adjust existing position *)
+      let delta = target_quantity -. pos.quantity in
+      if abs_float delta > 0.001 then
+        let cost = delta *. current_price in
+        let commission = abs_float cost *. config.commission_rate in
+        let slippage = abs_float delta *. current_price *. config.slippage_rate in
+        
+        if (delta > 0.0 && !updated_cash >= cost +. commission +. slippage) ||
+           (delta < 0.0) then
+          (updated_cash := !updated_cash -. cost -. commission -. slippage;
+           Hashtbl.replace updated_positions symbol {
+             pos with quantity = target_quantity;
+                      current_value = target_quantity *. current_price
+           };
+           updated_trades := {
+             symbol; side = if delta > 0.0 then `Buy else `Sell;
+             quantity = abs_float delta; price = current_price;
+             timestamp = data.timestamp; commission; slippage
+           } :: !updated_trades)
+  ) target_positions;
+  
+  { portfolio with
+    cash = !updated_cash;
+    positions = updated_positions;
+    trades = !updated_trades
+  }
+\end{lstlisting}
+
+\section{将Alpha信号转换为交易行动}
+
+\subsection{信号到订单的转换}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+    node distance=1.2cm,
+    signal/.style={ellipse, draw=blue!50, fill=blue!10, thick, minimum width=2cm, minimum height=0.8cm, text centered},
+    process/.style={rectangle, draw=green!50, fill=green!10, thick, minimum width=2.5cm, minimum height=0.8cm, text centered, rounded corners},
+    order/.style={rectangle, draw=orange!50, fill=orange!10, thick, minimum width=2.5cm, minimum height=0.8cm, text centered, rounded corners},
+    arrow/.style={->, >=stealth, thick}
+]
+    % Signal
+    \node[signal] (signal) {Alpha\\Signal};
+    
+    % Processing steps
+    \node[process, below=of signal] (sizing) {Position\\Sizing};
+    \node[process, right=of sizing] (risk) {Risk\\Check};
+    \node[process, below=of sizing] (order) {Order\\Construction};
+    \node[process, right=of order] (validate) {Order\\Validation};
+    
+    % Output
+    \node[order, below=of order] (market) {Market\\Order};
+    
+    % Arrows
+    \draw[arrow] (signal) -> (sizing);
+    \draw[arrow] (sizing) -> (risk);
+    \draw[arrow] (risk) -> (order);
+    \draw[arrow] (order) -> (validate);
+    \draw[arrow] (validate) -> (market);
+    \draw[arrow, dashed, bend right=30] (risk) to node[below, font=\tiny] {Reject} (signal);
+\end{tikzpicture}
+\caption{信号到订单转换过程}
+\label{fig:signal-to-order}
+\end{figure}
+
+\subsection{OCaml交易执行系统}
+
+\begin{lstlisting}[style=ocaml, caption=OCaml交易执行（Jane Street风格）]
+open Async
+open Core
+
+(* Order types *)
+type order_type =
+  | Market
+  | Limit of float
+  | StopLoss of float
+  | TakeProfit of float
+
+type order_side = Buy | Sell
+
+type order = {
+  symbol : string;
+  side : order_side;
+  quantity : float;
+  order_type : order_type;
+  time_in_force : [`Day | `GTC | `IOC | `FOK];
+  alpha_id : string;
+  timestamp : Time.t;
+}
+
+type order_status =
+  | Pending
+  | Submitted
+  | PartiallyFilled of float
+  | Filled
+  | Rejected of string
+  | Cancelled
+
+type execution = {
+  order_id : string;
+  symbol : string;
+  side : order_side;
+  quantity : float;
+  price : float;
+  timestamp : Time.t;
+  commission : float;
+}
+
+(* Position sizing based on signal and risk *)
+let calculate_position_size (signal : normalized_signal)
+                            (account_equity : float)
+                            (alpha_allocation : float)
+                            (risk_per_trade : float)
+                            (current_price : float) : float =
+  
+  (* Base allocation from alpha *)
+  let base_allocation = account_equity *. alpha_allocation in
+  
+  (* Scale by signal strength and confidence *)
+  let scaled_allocation = base_allocation *. 
+                          (abs_float signal.value *. signal.confidence) in
+  
+  (* Apply risk limit: max loss = risk_per_trade * equity *)
+  let max_loss = account_equity *. risk_per_trade in
+  let stop_loss_distance = current_price *. 0.02 in  (* 2% stop loss *)
+  let max_quantity_by_risk = max_loss /. stop_loss_distance in
+  
+  (* Final quantity: min of allocation and risk limit *)
+  let target_value = min scaled_allocation 
+                           (max_quantity_by_risk *. current_price) in
+  let quantity = target_value /. current_price in
+  
+  (* Apply direction *)
+  if signal.direction = `Long then quantity
+  else if signal.direction = `Short then -.quantity
+  else 0.0
+
+(* Convert alpha signal to order *)
+let signal_to_order (signal : normalized_signal)
+                    (symbol : string)
+                    (current_price : float)
+                    (account_state : account_state)
+                    (alpha_config : alpha_config) : order option =
+  
+  (* Calculate position size *)
+  let target_quantity = calculate_position_size 
+                          signal 
+                          account_state.equity
+                          alpha_config.allocation
+                          alpha_config.risk_per_trade
+                          current_price in
+  
+  (* Check if order is meaningful *)
+  if abs_float target_quantity < 0.01 then
+    None  (* Position too small *)
+  else
+    (* Check current position *)
+    let current_pos = get_position account_state symbol in
+    let delta = target_quantity -. (match current_pos with
+      | None -> 0.0
+      | Some pos -> pos.quantity) in
+    
+    (* Only create order if significant change *)
+    if abs_float delta < 0.01 then
+      None  (* No change needed *)
+    else
+      (* Construct order *)
+      let side = if delta > 0.0 then Buy else Sell in
+      let quantity = abs_float delta in
+      
+      Some {
+        symbol;
+        side;
+        quantity;
+        order_type = Market;  (* Start with market, can upgrade to limit *)
+        time_in_force = `Day;
+        alpha_id = alpha_config.id;
+        timestamp = Time.now ()
+      }
+
+(* Risk management checks *)
+let validate_order (order : order)
+                   (account_state : account_state)
+                   (risk_limits : risk_limits) : (order, string) result =
+  
+  (* Check position limits *)
+  let current_exposure = calculate_exposure account_state in
+  let new_exposure = current_exposure +. 
+                     (order.quantity *. (get_current_price order.symbol)) in
+  
+  if new_exposure > risk_limits.max_exposure then
+    Error "Exceeds maximum exposure limit"
+  
+  (* Check concentration limits *)
+  else if get_position_concentration account_state order.symbol > 
+          risk_limits.max_concentration then
+    Error "Exceeds maximum position concentration"
+  
+  (* Check daily loss limit *)
+  else if account_state.daily_pnl < -.risk_limits.max_daily_loss then
+    Error "Daily loss limit reached"
+  
+  (* Check margin requirements *)
+  else if not (check_margin_requirement account_state order) then
+    Error "Insufficient margin"
+  
+  else
+    Ok order
+
+(* Order execution with Async *)
+let execute_order (order : order)
+                 (broker : broker_connection) : execution Deferred.t =
+  
+  (* Submit order to broker *)
+  let%bind order_id = submit_order broker order in
+  
+  (* Monitor order status *)
+  let rec monitor_order () =
+    let%bind status = get_order_status broker order_id in
+    match status with
+    | Filled ->
+      let%bind execution = get_execution_details broker order_id in
+      return execution
+    
+    | Rejected reason ->
+      failwith (sprintf "Order rejected: %s" reason)
+    
+    | PartiallyFilled filled_qty ->
+      (* Continue monitoring for remaining quantity *)
+      after (Time.Span.of_sec 1.0) >>= monitor_order
+    
+    | _ ->
+      (* Still pending, check again *)
+      after (Time.Span.of_sec 0.5) >>= monitor_order
+  
+  in
+  monitor_order ()
+
+(* Real-time alpha execution loop *)
+let run_alpha_execution (alpha : alpha_config)
+                       (data_stream : market_data Pipe.Reader.t)
+                       (broker : broker_connection) : unit Deferred.t =
+  
+  let rec execution_loop (account_state : account_state) =
+    let%bind market_data = Pipe.read data_stream in
+    match market_data with
+    | `Ok data ->
+      (* Evaluate alpha expression *)
+      let raw_signal = evaluate_expr alpha.expression data in
+      let signal = normalize_signal raw_signal alpha.stats in
+      
+      (* Convert to order *)
+      match signal_to_order signal data.symbol data.price account_state alpha with
+      | None ->
+        (* No order needed, continue *)
+        execution_loop account_state
+      
+      | Some order ->
+        (* Validate order *)
+        (match validate_order order account_state alpha.risk_limits with
+        | Error reason ->
+          Log.error "Order validation failed: %s" reason;
+          execution_loop account_state
+        | Ok validated_order ->
+          (* Execute order *)
+          let%bind execution = execute_order validated_order broker in
+          
+          (* Update account state *)
+          let updated_state = update_account_state account_state execution in
+          
+          (* Log execution *)
+          Log.info "Executed: %s %f @ %f" 
+            (match order.side with Buy -> "BUY" | Sell -> "SELL")
+            execution.quantity execution.price;
+          
+          (* Continue loop *)
+          execution_loop updated_state)
+    
+    | `Eof ->
+      return ()
+  
+  in
+  execution_loop (get_initial_account_state broker)
+\end{lstlisting}
+
+\section{实时执行架构}
+
+\subsection{基于Async的并发执行}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+    node distance=1cm,
+    component/.style={rectangle, draw=blue!50, fill=blue!10, thick, minimum width=2.5cm, minimum height=0.8cm, text centered, rounded corners},
+    stream/.style={ellipse, draw=green!50, fill=green!10, thick, minimum width=2cm, minimum height=0.6cm, text centered},
+    arrow/.style={->, >=stealth, thick}
+]
+    % Data streams
+    \node[stream] (market) {Market Data\\Stream};
+    \node[stream, right=of market] (signals) {Alpha Signals\\Stream};
+    
+    % Processing
+    \node[component, below=of market] (eval) {Expression\\Evaluator};
+    \node[component, below=of signals] (sizing) {Position\\Sizer};
+    \node[component, below=of sizing] (risk) {Risk\\Manager};
+    \node[component, below=of risk] (exec) {Order\\Executor};
+    
+    % Broker
+    \node[component, below=of exec, minimum width=3cm] (broker) {Broker\\Connection};
+    
+    % Arrows
+    \draw[arrow] (market) -> (eval);
+    \draw[arrow] (eval) -> (signals);
+    \draw[arrow] (signals) -> (sizing);
+    \draw[arrow] (sizing) -> (risk);
+    \draw[arrow] (risk) -> (exec);
+    \draw[arrow] (exec) -> (broker);
+    
+    % Concurrent execution indicators
+    \node[right=0.5cm of eval, font=\tiny] {Async};
+    \node[right=0.5cm of exec, font=\tiny] {Concurrent};
+\end{tikzpicture}
+\caption{使用Async的实时执行架构}
+\label{fig:realtime-execution}
+\end{figure}
+
+\subsection{并发Alpha执行}
+
+\begin{lstlisting}[style=ocaml, caption=并发多Alpha执行]
+(* Execute multiple alphas concurrently *)
+let run_multi_alpha_execution (alphas : alpha_config list)
+                              (data_stream : market_data Pipe.Reader.t)
+                              (broker : broker_connection) : unit Deferred.t =
+  
+  (* Create signal streams for each alpha *)
+  let signal_streams = List.map (fun alpha ->
+    let reader, writer = Pipe.create () in
+    (* Evaluate alpha in background *)
+    don't_wait_for (
+      Pipe.iter_without_pushback data_stream ~f:(fun data ->
+        let signal = evaluate_and_normalize alpha data in
+        Pipe.write_without_pushback writer signal
+      )
+    );
+    (alpha.id, reader)
+  ) alphas in
+  
+  (* Aggregate signals *)
+  let aggregated_signals = Pipe.merge signal_streams in
+  
+  (* Position sizing and risk management *)
+  let order_stream = Pipe.map aggregated_signals ~f:(fun (alpha_id, signal) ->
+    let alpha = List.find (fun a -> a.id = alpha_id) alphas in
+    signal_to_order signal alpha
+  ) in
+  
+  (* Execute orders concurrently *)
+  Pipe.iter_without_pushback order_stream ~f:(fun order_opt ->
+    match order_opt with
+    | None -> return ()
+    | Some order ->
+      match validate_order order with
+      | Error _ -> return ()
+      | Ok validated ->
+        (* Execute in background, don't block *)
+        don't_wait_for (execute_order validated broker)
+  )
+
+(* Portfolio-level risk management *)
+let portfolio_risk_check (all_positions : position list)
+                        (proposed_order : order)
+                        (risk_limits : portfolio_risk_limits) : bool =
+  
+  (* Calculate portfolio metrics *)
+  let total_exposure = List.fold_left (fun acc pos ->
+    acc +. (abs_float pos.quantity *. pos.current_price)
+  ) 0.0 all_positions in
+  
+  let new_exposure = total_exposure +. 
+                     (proposed_order.quantity *. (get_price proposed_order.symbol)) in
+  
+  (* Check portfolio-level limits *)
+  new_exposure <= risk_limits.max_total_exposure &&
+  calculate_portfolio_var all_positions proposed_order <= risk_limits.max_var &&
+  calculate_correlation_risk all_positions proposed_order <= risk_limits.max_correlation
+\end{lstlisting}
+
+\section{完整执行流程}
+
+\subsection{端到端过程}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+    node distance=0.8cm,
+    step/.style={rectangle, draw=blue!50, fill=blue!10, thick, minimum width=2.2cm, minimum height=0.7cm, text centered, rounded corners, font=\small},
+    data/.style={ellipse, draw=orange!50, fill=orange!10, thick, minimum width=1.8cm, minimum height=0.6cm, text centered, font=\tiny},
+    arrow/.style={->, >=stealth, thick}
+]
+    % Steps
+    \node[step] (alpha) {Alpha\\Expression};
+    \node[data, right=of alpha] (data1) {Market\\Data};
+    \node[step, below=of alpha] (eval) {Evaluate};
+    \node[step, below=of eval] (signal) {Normalize\\Signal};
+    \node[step, below=of signal] (size) {Position\\Sizing};
+    \node[step, below=of size] (risk) {Risk\\Check};
+    \node[step, below=of risk] (order) {Create\\Order};
+    \node[step, below=of order] (submit) {Submit\\Order};
+    \node[step, below=of submit] (exec) {Execution};
+    \node[step, below=of exec] (update) {Update\\Portfolio};
+    
+    % Arrows
+    \draw[arrow] (alpha) -> (eval);
+    \draw[arrow] (data1) -> (eval);
+    \draw[arrow] (eval) -> (signal);
+    \draw[arrow] (signal) -> (size);
+    \draw[arrow] (size) -> (risk);
+    \draw[arrow] (risk) -> (order);
+    \draw[arrow] (order) -> (submit);
+    \draw[arrow] (submit) -> (exec);
+    \draw[arrow] (exec) -> (update);
+    
+    % Rejection path
+    \draw[arrow, dashed, red!70, bend right=30] (risk) to node[right, font=\tiny] {Reject} (signal);
+\end{tikzpicture}
+\caption{完整执行流程：从Alpha表达式到市场行动}
+\label{fig:complete-execution-flow}
+\end{figure}
+
+\subsection{详细执行示例}
+
+\begin{lstlisting}[style=ocaml, caption=完整执行示例]
+(* Example: Executing "ts_rank(ts_delta(close, 1), 20)" *)
+
+let example_execution () : unit Deferred.t =
+  (* 1. Parse alpha expression *)
+  let alpha_expr = parse_alpha "ts_rank(ts_delta(close, 1), 20)" in
+  
+  (* 2. Get market data *)
+  let%bind market_data = fetch_market_data ["AAPL"; "MSFT"; "GOOGL"] in
+  
+  (* 3. Evaluate for each symbol *)
+  let signals = Array.map (fun symbol ->
+    let idx = find_symbol_index market_data symbol in
+    let raw = evaluate_expr alpha_expr market_data idx in
+    normalize_signal raw (get_stats market_data symbol)
+  ) market_data.symbols in
+  
+  (* 4. Find best signal *)
+  let best = Array.fold_left (fun best (idx, signal) ->
+    if abs_float signal.value > abs_float best.value then
+      (idx, signal)
+    else
+      best
+  ) (0, signals.(0)) (Array.mapi (fun i s -> (i, s)) signals) in
+  
+  let symbol_idx, signal = best in
+  let symbol = market_data.symbols.(symbol_idx) in
+  let current_price = (Hashtbl.find market_data.fields "close").(symbol_idx) in
+  
+  (* 5. Calculate position size *)
+  let account_equity = 100000.0 in
+  let alpha_allocation = 0.05 in  (* 5% per alpha *)
+  let risk_per_trade = 0.02 in  (* 2% risk *)
+  
+  let quantity = calculate_position_size 
+                   signal account_equity alpha_allocation 
+                   risk_per_trade current_price in
+  
+  (* 6. Create order *)
+  let order = {
+    symbol;
+    side = if quantity > 0.0 then Buy else Sell;
+    quantity = abs_float quantity;
+    order_type = Market;
+    time_in_force = `Day;
+    alpha_id = "alpha_001";
+    timestamp = Time.now ()
+  } in
+  
+  (* 7. Validate and execute *)
+  match validate_order order (get_account_state ()) (get_risk_limits ()) with
+  | Error reason ->
+    Log.error "Order rejected: %s" reason;
+    return ()
+  
+  | Ok validated_order ->
+    let%bind execution = execute_order validated_order (get_broker ()) in
+    Log.info "Executed: %s %f shares of %s @ $%.2f" 
+      (match execution.side with Buy -> "Bought" | Sell -> "Sold")
+      execution.quantity execution.symbol execution.price;
+    return ()
+\end{lstlisting}
+
+\section{性能和延迟考虑}
+
+\subsection{优化策略}
+
+\begin{itemize}
+    \item \textbf{表达式缓存}：缓存已求值的子表达式
+    \item \textbf{增量更新}：仅重新求值已更改的组件
+    \item \textbf{并行求值}：并发求值多个标的
+    \item \textbf{Async I/O}：非阻塞经纪商通信
+    \item \textbf{预计算统计}：缓存历史统计
+\end{itemize}
+
+\subsection{延迟分解}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lcc}
+\toprule
+操作 & 典型延迟 & 优化 \\
+\midrule
+表达式求值 & 1-5ms & 缓存、并行化 \\
+信号归一化 & <1ms & 预计算统计 \\
+持仓规模 & <1ms & 向量化计算 \\
+风险检查 & 1-2ms & 预计算限制 \\
+订单构建 & <1ms & 基于模板 \\
+订单提交 & 5-50ms & Async、连接池 \\
+执行确认 & 10-100ms & 取决于经纪商 \\
+\bottomrule
+\end{tabular}
+\caption{执行延迟分解}
+\end{table}
+
+\section{完整系统集成}
+
+\subsection{端到端架构}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+    node distance=0.5cm,
+    research/.style={rectangle, draw=purple!50, fill=purple!10, thick, minimum width=2.5cm, minimum height=0.8cm, text centered, rounded corners},
+    backtest/.style={rectangle, draw=blue!50, fill=blue!10, thick, minimum width=2.5cm, minimum height=0.8cm, text centered, rounded corners},
+    execution/.style={rectangle, draw=green!50, fill=green!10, thick, minimum width=2.5cm, minimum height=0.8cm, text centered, rounded corners},
+    data/.style={ellipse, draw=orange!50, fill=orange!10, thick, minimum width=1.8cm, minimum height=0.6cm, text centered},
+    arrow/.style={->, >=stealth, thick},
+    label/.style={font=\tiny, text centered}
+]
+    % Research phase
+    \node[research] (ideate) {Alpha\\Ideation};
+    \node[data, below=of ideate] (expressions) {Alpha\\Expressions};
+    
+    % Backtesting phase
+    \node[backtest, right=of ideate, xshift=1.5cm] (parse) {Parse\\\& Evaluate};
+    \node[backtest, below=of parse] (backtest) {Backtest\\Engine};
+    \node[data, below=of backtest] (results) {Backtest\\Results};
+    
+    % Selection
+    \node[research, right=of parse, xshift=1.5cm] (select) {Alpha\\Selection};
+    \node[data, below=of select] (selected) {Selected\\Alphas};
+    
+    % Execution phase
+    \node[execution, right=of select, xshift=1.5cm] (live) {Live\\Evaluation};
+    \node[execution, below=of live] (sizing) {Position\\Sizing};
+    \node[execution, below=of sizing] (risk) {Risk\\Management};
+    \node[execution, below=of risk] (order) {Order\\Execution};
+    \node[data, below=of order] (trades) {Live\\Trades};
+    
+    % Arrows
+    \draw[arrow] (ideate) -> (expressions);
+    \draw[arrow] (expressions) -> (parse);
+    \draw[arrow] (parse) -> (backtest);
+    \draw[arrow] (backtest) -> (results);
+    \draw[arrow] (results) -> (select);
+    \draw[arrow] (select) -> (selected);
+    \draw[arrow] (selected) -> (live);
+    \draw[arrow] (live) -> (sizing);
+    \draw[arrow] (sizing) -> (risk);
+    \draw[arrow] (risk) -> (order);
+    \draw[arrow] (order) -> (trades);
+    
+    % Feedback
+    \draw[arrow, dashed, bend right=50] (trades) to node[below, label] {Performance\\Feedback} (select);
+    
+    % Phase labels
+    \node[above=0.3cm of ideate, font=\small] {Research};
+    \node[above=0.3cm of parse, font=\small] {Backtesting};
+    \node[above=0.3cm of select, font=\small] {Selection};
+    \node[above=0.3cm of live, font=\small] {Execution};
+\end{tikzpicture}
+\caption{完整系统：从研究到执行}
+\label{fig:complete-system}
+\end{figure}
+
+\section{总结}
+
+基于OCaml的执行系统提供：
+
+\begin{enumerate}
+    \item \textbf{类型安全}：编译时保证防止运行时错误
+    \item \textbf{性能}：原生代码编译实现低延迟
+    \item \textbf{并发}：Async库用于非阻塞I/O
+    \item \textbf{正确性}：函数式编程减少错误
+    \item \textbf{可维护性}：清晰的关注点分离
+\end{enumerate}
+
+从Alpha表达式到市场执行的完整流水线是：
+\begin{enumerate}
+    \item 将Alpha表达式解析为AST
+    \item 使用市场数据评估表达式
+    \item 将信号归一化到交易范围
+    \item 使用风险限制计算持仓规模
+    \item 根据风险约束验证订单
+    \item 异步提交订单到经纪商
+    \item 监控执行并更新投资组合
+\end{enumerate}
+
+这种架构，受Jane Street方法的启发，确保健壮、高性能的交易执行，同时保持代码正确性和可维护性。

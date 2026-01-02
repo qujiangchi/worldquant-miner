@@ -1,0 +1,190 @@
+\documentclass[11pt,a4paper]{book}
+\usepackage[UTF8]{ctex}  % Chinese support
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{cite}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{tikz}
+\usetikzlibrary{shapes,arrows,positioning,calc,decorations.pathreplacing,fit,backgrounds}
+\geometry{margin=1in}
+
+% Chinese font settings
+% ctex package will automatically use available fonts
+% If SimSun/SimHei are not available, it will use Fandol fonts as fallback
+% Uncomment the following lines if you have specific fonts installed:
+% \setCJKmainfont{SimSun}  % 宋体
+% \setCJKsansfont{SimHei}  % 黑体
+% \setCJKmonofont{FangSong}  % 仿宋
+
+% Code listing styles
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    frame=single,
+    breaklines=true,
+    breakatwhitespace=true,
+    tabsize=2,
+    showspaces=false,
+    showstringspaces=false
+}
+
+% MQL5 listing style
+\lstdefinestyle{mql5}{
+    language=C,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    frame=single,
+    breaklines=true
+}
+
+% OCaml listing style
+\lstdefinestyle{ocaml}{
+    language=ML,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    frame=single,
+    breaklines=true,
+    showstringspaces=false
+}
+
+% Page style
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE]{\leftmark}
+\fancyhead[RO]{\rightmark}
+\fancyfoot[C]{\thepage}
+
+\title{从第一代到第二代：\\
+量子增强型Alpha挖掘系统的演进\\
+构建自优化交易策略发现平台的完整指南\\
+\& 运营一人量化交易公司}
+\author{zhutoutoutousan}
+\date{\today}
+
+\begin{document}
+
+\frontmatter
+
+\maketitle
+
+\begin{abstract}
+本书全面记录了从第一代到第二代Alpha挖掘系统的演进过程。它提供了\texttt{consultant-templates-ollama}系统的完整架构指南，包括详细的代码分析、模块描述和实现模式。本书随后扩展到第二代系统，包括自优化能力、基于遗传算法的实时测试和量子计算集成。此外，它还融入了MetaTrader 5专家顾问开发经验，并提出了完整的Mini-Quant系统——一个为一人运营优化的自持式全生命周期量化研究平台。本书包括运营一人量化交易公司的完整指南，涵盖公共数据源、多区域回测（EMEA、AMER、IND、CHN、USA）、Alpha管理、交易执行、基于AI决策的对冲，以及结合数据简洁性与MT5操作深度的独特价格行为交易策略。
+\end{abstract}
+
+\tableofcontents
+\listoffigures
+\listoftables
+
+\mainmatter
+
+% Part I: Generation One Architecture
+\part{第一代：基础架构}
+
+\input{chapters/generation-one-architecture}
+
+% Part II: Generation Two Evolution
+\part{第二代：自优化与演进}
+
+\input{chapters/generation-two-improvements}
+
+% Part III: Advanced Technologies
+\part{先进技术与集成}
+
+\input{chapters/quantum-computing-integration}
+
+\input{chapters/mt5-expert-advisor-experience}
+
+\input{chapters/fast-depth-hybrid-expressions}
+
+% Part IV: Mini-Quant System
+\part{Mini-Quant：一人量化交易公司}
+
+\input{chapters/one-man-quant-trading-firm}
+
+% Part V: Execution Systems
+\part{执行系统：从回测到市场行动}
+
+\input{chapters/ocaml-backtesting-execution}
+
+% Part VI: Cryptocurrency Trading
+\part{加密货币交易：高级策略与经纪商集成}
+
+\input{chapters/crypto-trading-strategies}
+
+% Part VII: Commercial Models and Gaming Platforms
+\part{商业模式与游戏平台}
+
+\input{chapters/b2b-alpha-signals}
+\input{chapters/b2c-trading-platform}
+\input{chapters/gaming-trading-platform}
+
+\appendix
+
+\chapter{API参考}
+
+\section{WorldQuant Brain API}
+Alpha模拟与评估的完整API参考。
+
+\section{MT5 API}
+用于经纪商集成的MetaTrader 5 API文档。
+
+\chapter{代码示例}
+
+\section{第一代完整示例}
+来自consultant-templates-ollama系统的完整工作示例。
+
+\section{第二代实现示例}
+自优化与遗传算法实现。
+
+\backmatter
+
+\chapter*{参考文献}
+\addcontentsline{toc}{chapter}{参考文献}
+
+\begin{thebibliography}{99}
+
+\bibitem{worldquant2015}
+WorldQuant Brain, ``Alpha Mining Platform,'' \textit{WorldQuant}, 2015.
+
+\bibitem{farhi2014}
+E. Farhi, J. Goldstone, and S. Gutmann, ``A Quantum Approximate Optimization Algorithm,'' \textit{arXiv preprint arXiv:1411.4028}, 2014.
+
+\bibitem{peruzzo2014}
+A. Peruzzo et al., ``A variational eigenvalue solver on a photonic quantum processor,'' \textit{Nature Communications}, vol. 5, p. 4213, 2014.
+
+\bibitem{mt5docs}
+MetaQuotes Software Corp., ``MQL5 Reference,'' \textit{https://www.mql5.com/en/docs}, 2024.
+
+\bibitem{holland1992}
+J. H. Holland, \textit{Adaptation in Natural and Artificial Systems}. MIT Press, 1992.
+
+\bibitem{deb2002}
+K. Deb et al., ``A fast and elitist multiobjective genetic algorithm: NSGA-II,'' \textit{IEEE Transactions on Evolutionary Computation}, vol. 6, no. 2, pp. 182-197, 2002.
+
+\bibitem{gradzki2025}
+P. Grądzki, P. Wójcik, and S. Lessmann, ``Algorithmic crypto trading using information-driven bars, triple barrier labeling and deep learning,'' \textit{Financial Innovation}, vol. 11, article 136, 2025. \url{https://doi.org/10.1186/s40854-025-00866-w}
+
+\end{thebibliography}
+
+\end{document}

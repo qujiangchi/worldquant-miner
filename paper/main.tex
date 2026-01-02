@@ -1,0 +1,193 @@
+\documentclass[11pt,a4paper]{book}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{cite}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{tikz}
+\usetikzlibrary{shapes,arrows,positioning,calc,decorations.pathreplacing,fit,backgrounds}
+\geometry{margin=1in}
+
+% Code listing styles
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    frame=single,
+    breaklines=true,
+    breakatwhitespace=true,
+    tabsize=2,
+    showspaces=false,
+    showstringspaces=false
+}
+
+% MQL5 listing style
+\lstdefinestyle{mql5}{
+    language=C,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    frame=single,
+    breaklines=true
+}
+
+% OCaml listing style
+\lstdefinestyle{ocaml}{
+    language=ML,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    frame=single,
+    breaklines=true,
+    showstringspaces=false
+}
+
+% Page style
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE]{\leftmark}
+\fancyhead[RO]{\rightmark}
+\fancyfoot[C]{\thepage}
+
+\title{From Generation One to Generation Two:\\
+Evolution of Quantum-Enhanced Alpha Mining Systems\\
+A Complete Guide to Building Self-Optimizing Trading Strategy Discovery Platforms\\
+\& Operating a One-Man Quant Trading Firm}
+\author{zhutoutoutousan}
+\date{\today}
+
+\begin{document}
+
+\frontmatter
+
+\maketitle
+
+\begin{abstract}
+This comprehensive book documents the evolution from Generation One to Generation Two alpha mining systems. It provides a complete architectural guide to the \texttt{consultant-templates-ollama} system, including detailed code analysis, module descriptions, and implementation patterns. The book then extends to Generation Two with self-optimization capabilities, genetic algorithm-based evolution, continuous mining with automated error correction, template validation with self-correcting AST, expression compilation pipeline, and a modern cyberpunk GUI interface. Generation Two features modular architecture, smart Ollama integration with automatic fallback, concurrent simulation execution, quality monitoring, and 24/7 continuous alpha discovery. Additionally, it incorporates MetaTrader 5 expert advisor development experience and presents a complete Mini-Quant system—a self-sustained full-lifecycle quantitative research platform optimized for one-man operations. The book includes a comprehensive guide to operating a one-man quant trading firm, covering public data sources, multi-region backtesting (EMEA, AMER, IND, CHN, USA), alpha management, trade execution, AI decision-based hedging, and unique price action trading strategies combining data simplicity with MT5 operational depth.
+\end{abstract}
+
+\tableofcontents
+\listoffigures
+\listoftables
+
+\mainmatter
+
+% Part I: Generation One Architecture
+\part{Generation One: Foundation Architecture}
+
+\input{chapters/generation-one-architecture}
+
+% Part II: Generation Two Evolution
+\part{Generation Two: Self-Optimization and Evolution}
+
+\input{chapters/generation-two-improvements}
+
+\chapter{Continuous Mining and Error Correction}
+This chapter covers the continuous mining system with automated template generation, simulation submission, error detection, and self-correcting template validation. The system features infinite retry mechanisms for critical errors, field placeholder replacement, and real-time progress monitoring.
+
+\chapter{Template Validation and Expression Compilation}
+This chapter details the multi-stage expression compilation pipeline, self-correcting AST system, error learning mechanisms, and prompt engineering for template fixes. The system learns from simulation errors and applies corrections automatically.
+
+\chapter{GUI and User Interface}
+This chapter describes the cyberpunk-themed GUI interface, workflow panels, continuous mining controls, and real-time monitoring capabilities. The modular GUI architecture separates concerns for maintainability.
+
+% Part III: Advanced Technologies
+\part{Advanced Technologies and Integration}
+
+\input{chapters/quantum-computing-integration}
+
+\input{chapters/mt5-expert-advisor-experience}
+
+\input{chapters/fast-depth-hybrid-expressions}
+
+% Part IV: Mini-Quant System
+\part{Mini-Quant: One-Man Quant Trading Firm}
+
+\input{chapters/one-man-quant-trading-firm}
+
+% Part V: Execution Systems
+\part{Execution Systems: From Backtesting to Market Actions}
+
+\input{chapters/ocaml-backtesting-execution}
+
+% Part VI: Cryptocurrency Trading
+\part{Cryptocurrency Trading: Advanced Strategies and Broker Integration}
+
+\input{chapters/crypto-trading-strategies}
+
+% Part VII: Commercial Models and Gaming Platforms
+\part{Commercial Models and Gaming Platforms}
+
+\input{chapters/b2b-alpha-signals}
+\input{chapters/b2c-trading-platform}
+\input{chapters/gaming-trading-platform}
+
+\appendix
+
+\chapter{API Reference}
+
+\section{WorldQuant Brain API}
+Complete API reference for alpha simulation and evaluation.
+
+\section{MT5 API}
+MetaTrader 5 API documentation for broker integration.
+
+\chapter{Code Examples}
+
+\section{Generation One Complete Examples}
+Full working examples from the consultant-templates-ollama system.
+
+\section{Generation Two Implementation Examples}
+Self-optimization and genetic algorithm implementations.
+
+\backmatter
+
+\chapter*{Bibliography}
+\addcontentsline{toc}{chapter}{Bibliography}
+
+\begin{thebibliography}{99}
+
+\bibitem{worldquant2015}
+WorldQuant Brain, ``Alpha Mining Platform,'' \textit{WorldQuant}, 2015.
+
+\bibitem{farhi2014}
+E. Farhi, J. Goldstone, and S. Gutmann, ``A Quantum Approximate Optimization Algorithm,'' \textit{arXiv preprint arXiv:1411.4028}, 2014.
+
+\bibitem{peruzzo2014}
+A. Peruzzo et al., ``A variational eigenvalue solver on a photonic quantum processor,'' \textit{Nature Communications}, vol. 5, p. 4213, 2014.
+
+\bibitem{mt5docs}
+MetaQuotes Software Corp., ``MQL5 Reference,'' \textit{https://www.mql5.com/en/docs}, 2024.
+
+\bibitem{holland1992}
+J. H. Holland, \textit{Adaptation in Natural and Artificial Systems}. MIT Press, 1992.
+
+\bibitem{deb2002}
+K. Deb et al., ``A fast and elitist multiobjective genetic algorithm: NSGA-II,'' \textit{IEEE Transactions on Evolutionary Computation}, vol. 6, no. 2, pp. 182-197, 2002.
+
+\bibitem{gradzki2025}
+P. Grądzki, P. Wójcik, and S. Lessmann, ``Algorithmic crypto trading using information-driven bars, triple barrier labeling and deep learning,'' \textit{Financial Innovation}, vol. 11, article 136, 2025. \url{https://doi.org/10.1186/s40854-025-00866-w}
+
+\end{thebibliography}
+
+\end{document}
+
