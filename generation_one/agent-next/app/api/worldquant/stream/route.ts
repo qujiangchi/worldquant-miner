@@ -1,5 +1,4 @@
 import { NextRequest } from 'next/server';
-import { getStoredCredentials } from '@/lib/auth';
 
 // Base URL for WorldQuant Brain API
 const API_BASE_URL = 'https://api.worldquantbrain.com';
@@ -20,21 +19,24 @@ export async function GET(request: NextRequest) {
     }
   });
   
+  // Get credentials from Authorization header or cookies
+  const authHeader = request.headers.get('Authorization');
+  
+  if (!authHeader || !authHeader.startsWith('Basic ')) {
+    return new Response('data: {"error":"Authentication required"}\n\n', {
+      status: 401,
+      headers: {
+        'Content-Type': 'text/event-stream',
+      },
+    });
+  }
+  
   // Create a new ReadableStream for SSE
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        const credentials = getStoredCredentials();
-        
-        if (!credentials) {
-          controller.enqueue(new TextEncoder().encode('data: {"error":"Authentication required"}\n\n'));
-          controller.close();
-          return;
-        }
-        
-        // Create base64 encoded auth string
-        const authString = `${credentials.username}:${credentials.password}`;
-        const base64Auth = Buffer.from(authString).toString('base64');
+        // Use the Authorization header directly
+        const base64Auth = authHeader.replace('Basic ', '');
         
         const url = new URL(`${API_BASE_URL}${endpoint}`);
         
