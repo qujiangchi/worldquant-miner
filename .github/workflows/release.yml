@@ -1,0 +1,185 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v1.0.0
+  workflow_dispatch:  # Allow manual triggering
+    inputs:
+      version:
+        description: 'Version number (e.g., 1.0.0)'
+        required: true
+        type: string
+
+jobs:
+  build-windows:
+    name: Build Windows EXE
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          cd generation_two
+          pip install -r requirements.txt
+
+      - name: Build EXE
+        run: |
+          cd generation_two
+          python build.py --exe
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: generation-two-windows
+          path: generation_two/dist/generation-two.exe
+          if-no-files-found: error
+
+  build-linux:
+    name: Build Linux DEB
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev debhelper
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install stdeb
+          cd generation_two
+          pip install -r requirements.txt
+
+      - name: Build DEB
+        run: |
+          cd generation_two
+          python build.py --deb
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: generation-two-linux
+          path: generation_two/dist/*.deb
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS DMG
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          brew install create-dmg || true
+          cd generation_two
+          pip install -r requirements.txt
+
+      - name: Build DMG
+        run: |
+          cd generation_two
+          python build.py --dmg
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: generation-two-macos
+          path: generation_two/dist/*.dmg
+          if-no-files-found: error
+
+  create-release:
+    name: Create GitHub Release
+    needs: [build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION=${GITHUB_REF#refs/tags/v}
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          # Windows
+          if [ -f artifacts/generation-two-windows/generation-two.exe ]; then
+            cp artifacts/generation-two-windows/generation-two.exe release-assets/generation-two-${{ steps.version.outputs.version }}-windows.exe
+          fi
+          # Linux - copy all deb files
+          if [ -d artifacts/generation-two-linux ]; then
+            find artifacts/generation-two-linux -name "*.deb" -exec cp {} release-assets/ \;
+          fi
+          # macOS - copy all dmg files
+          if [ -d artifacts/generation-two-macos ]; then
+            find artifacts/generation-two-macos -name "*.dmg" -exec cp {} release-assets/ \;
+          fi
+          # List what we have
+          echo "Release assets prepared:"
+          ls -lh release-assets/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Release ${{ steps.version.outputs.version }}
+          body: |
+            ## Generation Two ${{ steps.version.outputs.version }}
+
+            ### Downloads
+            - **Windows**: `generation-two-${{ steps.version.outputs.version }}-windows.exe`
+            - **Linux**: `generation-two_*.deb` (Debian/Ubuntu package)
+            - **macOS**: `generation-two.dmg`
+
+            ### Installation
+            1. Download the appropriate file for your platform
+            2. **Windows**: Run the `.exe` file
+            3. **Linux**: Install with `sudo dpkg -i generation-two_*.deb`
+            4. **macOS**: Open the `.dmg` file and drag the app to Applications
+
+            ### Notes
+            - Credentials are NOT included. You must provide your own `credential.txt` file.
+            - See [README.md](generation_two/README.md) for usage instructions.
+          files: release-assets/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

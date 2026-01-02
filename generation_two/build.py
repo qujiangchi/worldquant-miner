@@ -9,10 +9,16 @@ import subprocess
 import shutil
 from pathlib import Path
 
-def run_command(cmd, check=True):
+# Get the script's directory (generation_two/)
+SCRIPT_DIR = Path(__file__).parent.absolute()
+PROJECT_ROOT = SCRIPT_DIR.parent.absolute()
+
+def run_command(cmd, check=True, cwd=None):
     """Run a shell command"""
     print(f"Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, check=check)
+    if cwd:
+        print(f"  Working directory: {cwd}")
+    result = subprocess.run(cmd, check=check, cwd=cwd)
     return result.returncode == 0
 
 def build_windows_exe():
@@ -28,17 +34,17 @@ def build_windows_exe():
         print("Installing PyInstaller...")
         run_command([sys.executable, "-m", "pip", "install", "pyinstaller"])
     
-    # Create spec file
-    spec_content = """# -*- mode: python ; coding: utf-8 -*-
+    # Create spec file in project root
+    spec_content = f"""# -*- mode: python ; coding: utf-8 -*-
 
 block_cipher = None
 
 a = Analysis(
-    ['gui/run_gui.py'],
-    pathex=[],
+    ['{SCRIPT_DIR}/gui/run_gui.py'],
+    pathex=['{PROJECT_ROOT}'],
     binaries=[],
     datas=[
-        ('constants/operatorRAW.json', 'constants'),
+        ('{SCRIPT_DIR}/constants/operatorRAW.json', 'constants'),
     ],
     hiddenimports=[
         'tkinter',
@@ -51,7 +57,7 @@ a = Analysis(
         'generation_two.storage',
     ],
     hookspath=[],
-    hooksconfig={},
+    hooksconfig={{}},
     runtime_hooks=[],
     excludes=[],
     win_no_prefer_redirects=False,
@@ -86,24 +92,27 @@ exe = EXE(
 )
 """
     
-    spec_file = Path("generation_two.spec")
+    spec_file = PROJECT_ROOT / "generation_two.spec"
     spec_file.write_text(spec_content)
     
-    # Build
-    os.chdir("generation_two")
-    run_command([sys.executable, "-m", "PyInstaller", "--clean", "../generation_two.spec"])
-    os.chdir("..")
+    # Build from project root
+    dist_dir = SCRIPT_DIR / "dist"
+    dist_dir.mkdir(exist_ok=True, parents=True)
+    
+    run_command(
+        [sys.executable, "-m", "PyInstaller", "--clean", str(spec_file)],
+        cwd=PROJECT_ROOT
+    )
     
     # Move exe to dist
-    dist_dir = Path("dist")
-    dist_dir.mkdir(exist_ok=True)
-    
-    exe_path = Path("generation_two/dist/generation-two.exe")
+    exe_path = PROJECT_ROOT / "dist" / "generation-two.exe"
+    target_path = SCRIPT_DIR / "dist" / "generation-two.exe"
     if exe_path.exists():
-        shutil.move(str(exe_path), "dist/generation-two.exe")
-        print("✅ Windows EXE built: dist/generation-two.exe")
+        target_path.parent.mkdir(exist_ok=True, parents=True)
+        shutil.move(str(exe_path), str(target_path))
+        print(f"✅ Windows EXE built: {target_path}")
     else:
-        print("❌ EXE not found in expected location")
+        print(f"❌ EXE not found in expected location: {exe_path}")
 
 def build_linux_deb():
     """Build Debian package"""
@@ -117,22 +126,27 @@ def build_linux_deb():
     
     # Build source distribution
     print("Building source distribution...")
-    run_command([sys.executable, "setup.py", "sdist"])
+    run_command([sys.executable, "setup.py", "sdist"], cwd=SCRIPT_DIR)
     
     # Convert to deb
     print("Converting to DEB...")
-    os.chdir("dist")
-    run_command([sys.executable, "-m", "stdeb", "generation-two-1.0.0.tar.gz"])
-    os.chdir("..")
+    dist_dir = SCRIPT_DIR / "dist"
+    tar_files = list(dist_dir.glob("generation-two-*.tar.gz"))
+    if not tar_files:
+        print("❌ Source distribution not found")
+        return
+    
+    tar_file = tar_files[0]
+    run_command([sys.executable, "-m", "stdeb", str(tar_file.name)], cwd=dist_dir)
     
     # Find and move deb file
-    deb_files = list(Path(".").rglob("*.deb"))
+    deb_files = list(PROJECT_ROOT.rglob("*.deb"))
     if deb_files:
         deb_file = deb_files[0]
-        dist_dir = Path("dist")
-        dist_dir.mkdir(exist_ok=True)
-        shutil.move(str(deb_file), f"dist/{deb_file.name}")
-        print(f"✅ Linux DEB built: dist/{deb_file.name}")
+        target_path = SCRIPT_DIR / "dist" / deb_file.name
+        target_path.parent.mkdir(exist_ok=True, parents=True)
+        shutil.move(str(deb_file), str(target_path))
+        print(f"✅ Linux DEB built: {target_path}")
     else:
         print("❌ DEB file not found")
 
@@ -154,21 +168,21 @@ def build_macos_dmg():
         run_command([sys.executable, "-m", "pip", "install", "pyinstaller"])
     
     # Build app bundle
-    os.chdir("generation_two")
     run_command([
         sys.executable, "-m", "PyInstaller",
         "--name=GenerationTwo",
         "--windowed",
         "--onedir",
-        "--add-data=constants/operatorRAW.json:constants",
-        "gui/run_gui.py"
-    ])
-    os.chdir("..")
+        f"--add-data={SCRIPT_DIR}/constants/operatorRAW.json:constants",
+        str(SCRIPT_DIR / "gui/run_gui.py")
+    ], cwd=PROJECT_ROOT)
     
     # Create DMG using create-dmg (requires: brew install create-dmg)
     print("Creating DMG...")
-    app_path = Path("generation_two/dist/GenerationTwo.app")
+    app_path = PROJECT_ROOT / "dist" / "GenerationTwo.app"
+    dmg_path = SCRIPT_DIR / "dist" / "generation-two.dmg"
     if app_path.exists():
+        dmg_path.parent.mkdir(exist_ok=True, parents=True)
         run_command([
             "create-dmg",
             "--volname", "Generation Two",
@@ -176,26 +190,29 @@ def build_macos_dmg():
             "--window-size", "800", "400",
             "--icon-size", "100",
             "--app-drop-link", "600", "185",
-            "dist/generation-two.dmg",
+            str(dmg_path),
             str(app_path)
         ], check=False)
-        print("✅ macOS DMG built: dist/generation-two.dmg")
+        print(f"✅ macOS DMG built: {dmg_path}")
     else:
-        print("❌ App bundle not found")
+        print(f"❌ App bundle not found: {app_path}")
 
 def main():
     """Main build function"""
     print("Generation Two Build Script")
     print("="*60)
+    print(f"Script directory: {SCRIPT_DIR}")
+    print(f"Project root: {PROJECT_ROOT}")
     
     # Clean previous builds
-    if Path("dist").exists():
-        shutil.rmtree("dist")
-    if Path("build").exists():
-        shutil.rmtree("build")
+    for clean_dir in [SCRIPT_DIR / "dist", PROJECT_ROOT / "dist", 
+                      SCRIPT_DIR / "build", PROJECT_ROOT / "build"]:
+        if clean_dir.exists():
+            print(f"Cleaning: {clean_dir}")
+            shutil.rmtree(clean_dir)
     
     # Create dist directory
-    Path("dist").mkdir(exist_ok=True)
+    (SCRIPT_DIR / "dist").mkdir(exist_ok=True, parents=True)
     
     # Detect platform and build accordingly
     platform = sys.platform.lower()
