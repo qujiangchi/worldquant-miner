@@ -200,17 +200,59 @@ def build_linux_deb():
     
     tar_file = tar_files[0]
     print(f"[OK] Found source distribution: {tar_file}")
-    # Use stdeb to convert tar.gz to deb
-    # Try py2dsc-deb command first (installed by stdeb)
-    py2dsc_deb_cmd = shutil.which("py2dsc-deb")
-    if py2dsc_deb_cmd:
-        # Try command first, but don't fail if it errors - fall back to API
-        print(f"Trying py2dsc-deb command...")
-        result = run_command([py2dsc_deb_cmd, str(tar_file.name)], cwd=dist_dir, check=False)
-        if not result:
-            print(f"[WARN] py2dsc-deb command failed, trying fallback methods...")
-            py2dsc_deb_cmd = None  # Force fallback
-    else:
+    # Use py2dsc to create debian source package, then manually build to avoid --install-layout issue
+    py2dsc_cmd = shutil.which("py2dsc")
+    if py2dsc_cmd:
+        print(f"Creating debian source package with py2dsc...")
+        result = run_command([py2dsc_cmd, str(tar_file.name)], cwd=dist_dir, check=False)
+        if result:
+            # Find the generated debian source directory
+            deb_dist_dir = dist_dir / "deb_dist"
+            deb_src_dirs = [d for d in deb_dist_dir.iterdir() if d.is_dir() and (d / "debian").exists()]
+            if deb_src_dirs:
+                deb_src_dir = deb_src_dirs[0]
+                print(f"[OK] Found debian source: {deb_src_dir}")
+                
+                # Patch debian/rules to fix --install-layout issue
+                debian_rules = deb_src_dir / "debian" / "rules"
+                if debian_rules.exists():
+                    rules_content = debian_rules.read_text()
+                    # Remove --install-layout option (not supported in newer setuptools)
+                    import re
+                    patched_rules = re.sub(r'--install-layout[=\s][^\s]+', '', rules_content)
+                    if patched_rules != rules_content:
+                        debian_rules.write_text(patched_rules)
+                        print(f"[OK] Patched debian/rules to remove --install-layout option")
+                
+                # Build binary package
+                print(f"Building binary DEB package...")
+                run_command(["dpkg-buildpackage", "-b", "-uc", "-us"], cwd=deb_src_dir, check=False)
+                
+                # Look for .deb files in parent directory
+                deb_files = list(deb_dist_dir.glob("*.deb"))
+                if deb_files:
+                    print(f"[OK] Found {len(deb_files)} DEB file(s) after manual build")
+                else:
+                    print(f"[WARN] No DEB files found after manual build, trying py2dsc-deb...")
+                    py2dsc_cmd = None  # Fall back to py2dsc-deb
+            else:
+                print(f"[WARN] No debian source directory found, trying py2dsc-deb...")
+                py2dsc_cmd = None
+        else:
+            print(f"[WARN] py2dsc failed, trying py2dsc-deb...")
+            py2dsc_cmd = None
+    
+    # Fallback to py2dsc-deb if py2dsc approach didn't work
+    if not py2dsc_cmd:
+        py2dsc_deb_cmd = shutil.which("py2dsc-deb")
+        if py2dsc_deb_cmd:
+            # Try command first, but don't fail if it errors - fall back to API
+            print(f"Trying py2dsc-deb command...")
+            result = run_command([py2dsc_deb_cmd, str(tar_file.name)], cwd=dist_dir, check=False)
+            if not result:
+                print(f"[WARN] py2dsc-deb command failed, trying fallback methods...")
+                py2dsc_deb_cmd = None  # Force fallback
+        else:
         # Fallback: use Python module (stdeb.command.py2dsc_deb can be called as module)
         print("[WARN] py2dsc-deb not in PATH, trying Python module...")
         try:
