@@ -39,9 +39,10 @@ submitted_alpha.json
 MT5/
 AI-Trader-main/
 refly-main/
-constants/
-# But allow operatorRAW.json for builds
-!generation_two/constants/operatorRAW.json
+# Ignore root constants directory
+/constants/
+# But allow generation_two/constants/operatorRAW.json for builds
+!/generation_two/constants/operatorRAW.json
 
 # Database files
 **.db
